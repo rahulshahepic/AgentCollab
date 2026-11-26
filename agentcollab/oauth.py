@@ -1,7 +1,10 @@
 """Persistent owner-approved grants for the MCP SDK's OAuth server."""
 
+import json
 import re
-from secrets import token_urlsafe
+from base64 import urlsafe_b64decode, urlsafe_b64encode
+from hmac import compare_digest, digest as hmac_digest
+from secrets import token_bytes, token_urlsafe
 from time import time
 
 from mcp.server.auth.provider import (
@@ -42,31 +45,42 @@ class StagingOAuth:
     def __init__(self, store, resource):
         self.store = store
         self.resource = resource
+        with store.session(write=True) as db:
+            db.execute("INSERT OR IGNORE INTO oauth_issuer (id, signing_key) VALUES (1, ?)", (token_bytes(32),))
+            self.signing_key = db.execute("SELECT signing_key FROM oauth_issuer WHERE id = 1").fetchone()[0]
+
+    def sign(self, purpose, value):
+        message = f"{self.resource} {purpose} {value}".encode()
+        return urlsafe_b64encode(hmac_digest(self.signing_key, message, "sha256")).decode().rstrip("=")
+
     async def get_client(self, client_id):
-        def read():
-            with self.store.session() as db:
-                row = db.execute("SELECT metadata FROM oauth_clients WHERE client_id = ?", (client_id,)).fetchone()
-                return OAuthClientInformationFull.model_validate_json(row["metadata"]) if row else None
-        return await run_in_threadpool(read)
+        if len(client_id) > 1024:
+            return None
+        payload, _, signature = client_id.partition(".")
+        if not signature.isascii() or not compare_digest(signature, self.sign("client", payload)):
+            return None
+        redirects, method, issued_at, _ = json.loads(urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+        return OAuthClientInformationFull(
+            client_id=client_id, client_id_issued_at=issued_at, redirect_uris=redirects,
+            token_endpoint_auth_method=method,
+            client_secret=None if method == "none" else self.sign("secret", client_id),
+            grant_types=["authorization_code", "refresh_token"], response_types=["code"], scope=SCOPE,
+        )
 
     async def register_client(self, client):
         redirects = [str(uri) for uri in client.redirect_uris or []]
         if not redirects or len(redirects) > 2 or any(not CHATGPT_REDIRECT.fullmatch(uri) for uri in redirects):
             raise RegistrationError("invalid_redirect_uri", "Use a ChatGPT OAuth callback.")
-        if client.token_endpoint_auth_method not in {"none", "client_secret_post", "client_secret_basic"}:
+        method = client.token_endpoint_auth_method
+        if method not in {"none", "client_secret_post", "client_secret_basic"}:
             raise RegistrationError("invalid_client_metadata", "Unsupported client authentication method.")
 
-        def register():
-            now = int(time())
-            with self.store.session(write=True) as db:
-                db.execute("DELETE FROM oauth_grants WHERE grant_expires <= ?", (now,))
-                db.execute("""DELETE FROM oauth_clients WHERE created <= ? AND client_id NOT IN
-                              (SELECT client_id FROM oauth_grants)""", (now - GRANT_SECONDS,))
-                if db.execute("SELECT count(*) FROM oauth_clients").fetchone()[0] >= 128:
-                    raise RegistrationError("invalid_client_metadata", "The staging registration limit was reached.")
-                db.execute("INSERT INTO oauth_clients VALUES (?, ?, ?)",
-                           (client.client_id, client.model_dump_json(), now))
-        await run_in_threadpool(register)
+        # Registration has no durable cost. Only the owner's authorization can create a grant.
+        payload = json.dumps([redirects, method, client.client_id_issued_at, token_urlsafe(16)], separators=(",", ":"))
+        encoded = urlsafe_b64encode(payload.encode()).decode().rstrip("=")
+        client.client_id = f"{encoded}.{self.sign('client', encoded)}"
+        if method != "none":
+            client.client_secret = self.sign("secret", client.client_id)
 
     async def authorize(self, client, params):
         if (params.resource != self.resource or params.scopes not in (None, [SCOPE])
@@ -138,6 +152,7 @@ class StagingOAuth:
                 if not self.unexpired(db, "oauth_codes", digest):
                     raise TokenError("invalid_grant", "Authorization code is no longer valid.")
                 db.execute("DELETE FROM oauth_codes WHERE digest = ?", (digest,))
+                db.execute("DELETE FROM oauth_grants WHERE grant_expires <= ?", (now,))
                 try:
                     self.store.active_agent(db, STAGING_WORKSPACE, authorization_code.subject)
                 except StoreError as exc:

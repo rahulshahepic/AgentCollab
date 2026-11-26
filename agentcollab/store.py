@@ -41,8 +41,8 @@ class Store:
                 );
                 CREATE INDEX IF NOT EXISTS inbox_order ON messages(recipient, created, id);
                 CREATE INDEX IF NOT EXISTS activity_order ON messages(workspace, created, id);
-                CREATE TABLE IF NOT EXISTS oauth_clients (
-                    client_id TEXT PRIMARY KEY, metadata TEXT NOT NULL, created INTEGER NOT NULL
+                CREATE TABLE IF NOT EXISTS oauth_issuer (
+                    id INTEGER PRIMARY KEY CHECK (id = 1), signing_key BLOB NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS oauth_requests (
                     digest TEXT PRIMARY KEY, data TEXT NOT NULL, expires REAL NOT NULL
@@ -51,7 +51,7 @@ class Store:
                     digest TEXT PRIMARY KEY, data TEXT NOT NULL, expires REAL NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS oauth_grants (
-                    client_id TEXT PRIMARY KEY REFERENCES oauth_clients(client_id) ON DELETE CASCADE,
+                    client_id TEXT PRIMARY KEY,
                     agent_id TEXT NOT NULL REFERENCES agents(id),
                     access_digest TEXT NOT NULL UNIQUE,
                     refresh_digest TEXT NOT NULL UNIQUE,

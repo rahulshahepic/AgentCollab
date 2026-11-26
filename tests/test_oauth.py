@@ -144,3 +144,23 @@ class StagingOAuthTests(unittest.TestCase):
         self.store.disconnect(STAGING_WORKSPACE, self.agent)
         self.assertEqual(self.rpc(tokens["access_token"]).status_code, 401)
         self.assertEqual(self.refresh(client_id, tokens["refresh_token"]).status_code, 400)
+
+    def test_unapproved_registration_cannot_crowd_out_owner_or_existing_grant(self):
+        client_id = self.register().json()["client_id"]
+        approved = self.consent(self.authorize(client_id).headers["location"])
+        code = parse_qs(urlsplit(approved.headers["location"]).query)["code"][0]
+        current = self.exchange(client_id, code).json()["access_token"]
+
+        for _ in range(140):
+            self.assertEqual(self.register().status_code, 201)
+
+        registration = self.register()
+        self.assertEqual(registration.status_code, 201, registration.text)
+        new_client = registration.json()["client_id"]
+        self.assertNotEqual(new_client, client_id)
+        self.assertEqual(self.authorize(new_client[:-1] + ("A" if new_client[-1] != "A" else "B")).status_code, 400)
+        approved = self.consent(self.authorize(new_client).headers["location"], agent=self.other)
+        code = parse_qs(urlsplit(approved.headers["location"]).query)["code"][0]
+        token = self.exchange(new_client, code).json()["access_token"]
+        self.assertEqual(self.result(self.rpc(token))["identity"]["id"], self.other)
+        self.assertEqual(self.result(self.rpc(current))["identity"]["id"], self.agent)
