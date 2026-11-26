@@ -1,6 +1,8 @@
 # AgentCollab architecture and product plan
 
-**Status:** Implementation on hold · November 26, 2026. Evaluate Agent Relay Cloud for personal use before revisiting a build.
+**Status:** v1 design in progress · November 26, 2026. Implementation is still on hold.
+
+[Read the v1 design](v1-design.md) for the proposed build scope, phone flow, MCP contract, and acceptance test. This architecture document also preserves earlier alternatives and research.
 
 ## What to build
 
