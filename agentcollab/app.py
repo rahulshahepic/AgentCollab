@@ -9,7 +9,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.provider import AccessToken, TokenVerifier
-from mcp.server.auth.settings import AuthSettings
+from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
@@ -25,6 +25,7 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+from .oauth import SCOPE, StagingOAuth
 from .staging import RAILWAY_HEALTH_HOST, STAGING_WORKSPACE, StagingBoundary, StagingConfig
 from .store import Store, StoreError
 
@@ -49,7 +50,7 @@ class WorkspaceTokens(TokenVerifier):
                            subject=workspace, resource=self.resource)
 
 
-def create_mcp(store, port, workspace, staging):
+def create_mcp(store, port, staging, oauth):
     origin = staging.origin if staging else f"http://127.0.0.1:{port}"
     resource = f"{origin}/mcp"
     server = FastMCP(
@@ -59,14 +60,20 @@ def create_mcp(store, port, workspace, staging):
         stateless_http=True,
         json_response=True,
         max_request_body_size=128 * 1024,
-        token_verifier=WorkspaceTokens(store, resource, workspace if staging else None),
+        token_verifier=None if oauth else WorkspaceTokens(store, resource, None),
+        auth_server_provider=oauth,
         transport_security=TransportSecuritySettings(
             allowed_hosts=[staging.host, f"{staging.host}:443"], allowed_origins=[origin],
         ) if staging else None,
         auth=AuthSettings(
             issuer_url=AnyHttpUrl(origin),
-            resource_server_url=None if staging else AnyHttpUrl(resource),
-            required_scopes=["message"], validate_token_resource=staging is None,
+            resource_server_url=AnyHttpUrl(resource),
+            required_scopes=[SCOPE],
+            validate_token_resource=True,
+            client_registration_options=ClientRegistrationOptions(
+                enabled=True, valid_scopes=[SCOPE], default_scopes=[SCOPE],
+            ) if oauth else None,
+            revocation_options=RevocationOptions(enabled=True) if oauth else None,
         ),
     )
 
@@ -110,7 +117,7 @@ def caller():
     token = get_access_token()
     if token is None or token.subject is None:
         raise ToolError("An agent token is required.")
-    return token.subject, token.client_id
+    return token.subject, (token.claims or {}).get("agent_id", token.client_id)
 
 
 def invoke(action, *args, **kwargs):
@@ -136,7 +143,7 @@ def page(section, body, *, status=200):
 <nav aria-label="Main navigation">{nav}</nav></div></header>
 <main><h1>{section}</h1>{body}</main></body></html>""", status_code=status, headers={
         "Cache-Control": "no-store", "Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'",
-        "X-Content-Type-Options": "nosniff",
+        "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
     })
 
 
@@ -170,12 +177,14 @@ def agents_page(store, workspace, *, error=None):
     for agent in store.list_agents(workspace):
         name, agent_id = escape(agent['name']), agent['id']
         label = "Needs connection"
-        if agent["linked"]:
+        if agent["oauth_linked"]:
+            label = "Linked with OAuth"
+        elif agent["manual_credential"]:
             label = "Credential issued" if workspace == STAGING_WORKSPACE else "Linked locally"
         token_form = ""
         if workspace == STAGING_WORKSPACE:
             token_form = f'''<form method="post" action="/agents/{agent_id}/credential">
-<button type="submit" class="secondary">{"Rotate credential" if agent["linked"] else "Issue credential"}</button>
+<button type="submit" class="secondary">{"Rotate credential" if agent["manual_credential"] else "Issue credential"}</button>
 </form>'''
         rows.append(f"""<details class="agent"><summary><strong>{name}</strong><span class="status">{label}</span></summary>
 <div class="agent-detail"><form method="post" action="/agents/{agent_id}/rename">
@@ -190,13 +199,17 @@ def agents_page(store, workspace, *, error=None):
 async def form_name(request, origin):
     if request.headers.get("origin") != origin:
         raise HTTPException(403)
+    return (await form_fields(request)).get("name", [""])[0]
+
+
+async def form_fields(request):
     content = bytearray()
     async for chunk in request.stream():
         content.extend(chunk)
         if len(content) > 1024:
             raise HTTPException(413)
     try:
-        return parse_qs(content.decode(), max_num_fields=4).get('name', [''])[0]
+        return parse_qs(content.decode(), max_num_fields=4)
     except ValueError as exc:
         raise HTTPException(400) from exc
 
@@ -204,7 +217,8 @@ async def form_name(request, origin):
 def create_app(database: Path, port: int = 8000, *, staging: StagingConfig | None = None):
     workspace = STAGING_WORKSPACE if staging else LOCAL_WORKSPACE
     store = Store(database)
-    server = create_mcp(store, port, workspace, staging)
+    oauth = StagingOAuth(store, f"{staging.origin}/mcp") if staging else None
+    server = create_mcp(store, port, staging, oauth)
     mcp_app = server.streamable_http_app()
 
     @asynccontextmanager
@@ -244,6 +258,43 @@ def create_app(database: Path, port: int = 8000, *, staging: StagingConfig | Non
         return page("Agents", "<p>Copy this credential now. Issuing a new one invalidates it.</p>"
                     f'<p><code>{escape(token)}</code></p><p><a href="/agents">Back to agents</a></p>')
 
+    async def oauth_consent(request: Request):
+        if request.method == "POST":
+            if request.headers.get("origin") != staging.origin:
+                raise HTTPException(403)
+            form = await form_fields(request)
+            handle = form.get("request", [""])[0]
+            decision = form.get("decision", [""])[0]
+            if decision not in {"approve", "deny"}:
+                raise HTTPException(400)
+            try:
+                destination = await run_in_threadpool(
+                    oauth.consent, handle, form.get("agent", [""])[0], decision == "approve",
+                )
+            except StoreError as exc:
+                return page("Connect to ChatGPT", f"<p>{escape(str(exc))}</p>", status=400)
+            return RedirectResponse(destination, status_code=303, headers={
+                "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+            })
+
+        handle = request.query_params.get("request", "")
+        if len(handle) != 43 or not await run_in_threadpool(oauth.pending, handle):
+            return page("Connect to ChatGPT", "<p>This request has expired. Reconnect from ChatGPT.</p>", status=400)
+        agents = await run_in_threadpool(store.list_agents, workspace)
+        options = "".join(f'<option value="{agent["id"]}">{escape(agent["name"])}</option>' for agent in agents)
+        if not options:
+            return page("Connect to ChatGPT", '<p><a href="/agents">Add an agent</a>, then reconnect from ChatGPT.</p>')
+        return page("Connect to ChatGPT", f"""
+<p>Choose which staging agent ChatGPT can send and read messages as.</p>
+<form class="consent" method="post" action="/oauth/consent">
+<input type="hidden" name="request" value="{escape(handle)}">
+<label for="agent">Agent</label>
+<select name="agent" id="agent" required>
+<option value="">Choose an agent</option>{options}</select>
+<button type="submit" name="decision" value="approve">Allow access</button>
+<button type="submit" class="secondary" name="decision" value="deny" formnovalidate>Deny</button>
+</form>""")
+
     async def change(action, *arguments):
         try:
             await run_in_threadpool(action, workspace, *arguments)
@@ -259,7 +310,10 @@ def create_app(database: Path, port: int = 8000, *, staging: StagingConfig | Non
     hosted_routes = []
     if staging:
         middleware.append(Middleware(StagingBoundary, config=staging))
-        hosted_routes.append(Route("/agents/{agent_id}/credential", credential, methods=["POST"]))
+        hosted_routes.extend([
+            Route("/agents/{agent_id}/credential", credential, methods=["POST"]),
+            Route("/oauth/consent", oauth_consent, methods=["GET", "POST"]),
+        ])
     return Starlette(
         routes=[Route("/", activity), Route("/agents", agents, methods=["GET", "POST"]),
                 Route("/agents/{agent_id}/rename", rename, methods=["POST"]),

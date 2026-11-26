@@ -41,6 +41,23 @@ class Store:
                 );
                 CREATE INDEX IF NOT EXISTS inbox_order ON messages(recipient, created, id);
                 CREATE INDEX IF NOT EXISTS activity_order ON messages(workspace, created, id);
+                CREATE TABLE IF NOT EXISTS oauth_clients (
+                    client_id TEXT PRIMARY KEY, metadata TEXT NOT NULL, created INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS oauth_requests (
+                    digest TEXT PRIMARY KEY, data TEXT NOT NULL, expires REAL NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS oauth_codes (
+                    digest TEXT PRIMARY KEY, data TEXT NOT NULL, expires REAL NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS oauth_grants (
+                    client_id TEXT PRIMARY KEY REFERENCES oauth_clients(client_id) ON DELETE CASCADE,
+                    agent_id TEXT NOT NULL REFERENCES agents(id),
+                    access_digest TEXT NOT NULL UNIQUE,
+                    refresh_digest TEXT NOT NULL UNIQUE,
+                    access_expires INTEGER NOT NULL,
+                    grant_expires INTEGER NOT NULL
+                );
             """)
 
     @contextmanager
@@ -68,9 +85,12 @@ class Store:
 
     def list_agents(self, workspace):
         with self.session() as db:
-            return [dict(row) for row in db.execute(
-                """SELECT id, name, token_hash IS NOT NULL AS linked FROM agents
-                   WHERE workspace = ? AND disconnected = 0 ORDER BY name_key""",
+            return [dict(row, linked=bool(row["manual_credential"] or row["oauth_linked"])) for row in db.execute(
+                """SELECT id, name, token_hash IS NOT NULL AS manual_credential,
+                   EXISTS (
+                       SELECT 1 FROM oauth_grants WHERE agent_id = agents.id
+                       AND grant_expires > CAST(strftime('%s', 'now') AS INTEGER)
+                   ) AS oauth_linked FROM agents WHERE workspace = ? AND disconnected = 0 ORDER BY name_key""",
                 (workspace,),
             )]
 
@@ -115,6 +135,7 @@ class Store:
             self.active_agent(db, workspace, agent_id)
             db.execute("UPDATE agents SET disconnected = 1, token_hash = NULL WHERE id = ?",
                        (agent_id,))
+            db.execute("DELETE FROM oauth_grants WHERE agent_id = ?", (agent_id,))
 
     def issue_token(self, workspace, name):
         token = secrets.token_urlsafe(32)
@@ -181,7 +202,10 @@ class Store:
                     raise StoreError("That request ID already belongs to another message.")
                 return existing['id']
             target = self.active_agent(db, workspace, recipient)
-            if target['token_hash'] is None:
+            if target["token_hash"] is None and not db.execute(
+                "SELECT 1 FROM oauth_grants WHERE agent_id = ? AND grant_expires > CAST(strftime('%s', 'now') AS INTEGER)",
+                (recipient,),
+            ).fetchone():
                 raise StoreError("Recipient needs a connection.")
             self.check_quota(db, workspace, sender)
             message_id = str(uuid4())

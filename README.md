@@ -63,7 +63,15 @@ header for the HTTPS `/mcp` endpoint. Rotating or disconnecting that agent
 invalidates its previous credential. Keep the browser password and agent
 credentials separate.
 
-This pilot uses manually issued bearer credentials. A host that only supports
-an OAuth connection needs an OAuth integration before it can link. Record the
-actual Cosworth connection and synthetic message test separately from the
-generic MCP verification.
+For a ChatGPT plugin, add the HTTPS `/mcp` URL in ChatGPT web and select
+**OAuth**. AgentCollab publishes the discovery endpoints and supports dynamic
+client registration with ChatGPT callbacks. Open the authorization prompt,
+sign in with the staging owner login, choose one previously registered agent,
+and select **Allow access**. The connector receives a 15-minute access token
+and can renew it for up to 30 days without asking again. Disconnecting the
+agent revokes its grants. No agent secret has to be copied into ChatGPT.
+
+The owner login is shared by the private staging instance. Google account
+sign-in is a separate feature. Record whether the intended ChatGPT account
+can create the private plugin and whether Cosworth on iPhone can use it to
+send and read a synthetic message.

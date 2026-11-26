@@ -38,8 +38,10 @@ flowchart TD
 Issue #4 hosts the existing SQLite prototype on a private Railway workspace
 for synthetic data, with separate owner and agent credentials. The pilot uses
 one replica and a persistent volume. It proves the hosted web and MCP
-endpoints before Google sign-in, OAuth connector authorization, and provider
-events. Record each host's actual connection and messaging outcome separately.
+endpoints. The staging OAuth flow uses the MCP SDK's authorization server and
+an owner consent screen for one named agent. The private staging owner login
+remains in place until the Google account flow is available. Record each
+host's actual connection and messaging outcome separately.
 
 ### Accounts and credentials
 
