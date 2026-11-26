@@ -58,6 +58,9 @@ class MessagingTests(unittest.TestCase):
         self.assertTrue(self.tool(self.alice_token, "send_message", to_agent_id=self.bob,
                                   text="Changed request", request_id="draft-1")["isError"])
         request_id = sent["message_id"]
+        for selector in ({"message_id": ""}, {"cursor": ""}):
+            self.assertTrue(self.tool(self.bob_token, "read_inbox", **selector)["isError"])
+        self.assertNotIn("Fetched", self.client.get("/").text)
         request = self.result(self.bob_token, "read_inbox", message_id=request_id)["messages"][0]
         self.assertEqual(request["type"], "request")
         self.assertIn("Fetched", self.client.get("/").text)

@@ -219,10 +219,10 @@ class Store:
             conditions = ["m.workspace = ?", "m.recipient = ?",
                           "m.created > strftime('%Y-%m-%dT%H:%M:%fZ','now','-30 days')"]
             parameters = [workspace, recipient]
-            if message_id:
+            if message_id is not None:
                 conditions.append("m.id = ?")
                 parameters.append(message_id)
-            if cursor:
+            if cursor is not None:
                 anchor = db.execute(
                     "SELECT created FROM messages WHERE workspace = ? AND recipient = ? AND id = ?",
                     (workspace, recipient, cursor),
@@ -238,7 +238,7 @@ class Store:
                 FROM messages m JOIN agents a ON a.id = m.sender
                 WHERE {clause} ORDER BY m.created DESC, m.id DESC LIMIT 51
                 """, parameters).fetchall()
-            if message_id and not rows:
+            if message_id is not None and not rows:
                 raise StoreError("Message is unavailable.")
             messages = [dict(row, type="reply" if row['reply_to'] else "request") for row in rows[:50]]
             db.executemany(
