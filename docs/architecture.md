@@ -74,6 +74,8 @@ MCP Streamable HTTP can carry server messages over an open connection when the c
 
 For AgentCollab, async messaging means sending a follow-up to a specific registered agent, with its existing conversation context, while the user is away. The recipient must be able to answer back into AgentCollab. A provider's documentation can establish the inbound path. Only a round-trip test establishes AgentCollab compatibility. Keep these capabilities distinct in setup and test results: **Can receive follow-ups**, **Can start a task**, **Reads when asked**, and **Unverified**. Track availability separately for connected-only and cloud-hosted agents.
 
+**MCP Events support specifically.** The MCP Events extension is specified by [SEP-3415](https://modelcontextprotocol.io/seps/3415-events-extension), which is marked Final, and the [extension is in beta](https://github.com/modelcontextprotocol/ext-events). OpenAI documents webhook delivery based on the draft for dots and supported ChatGPT Work chats. Verify compatibility between that shipped profile and the beta spec during the prototype. As of November 26, 2026, the survey found no public provider documentation confirming this exact extension in Claude (including Code, Cowork and Duet), Gemini, Perplexity, Grok, Muse, Copilot, Cursor, Devin, or Slackbot. Other entries below use the provider's own inbound mechanism or describe a candidate integration.
+
 #### Documented delivery into an existing agent or session
 
 | Host | What the provider supports | AgentCollab test |
