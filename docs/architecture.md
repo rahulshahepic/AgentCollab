@@ -2,7 +2,7 @@
 
 **Status:** v1 design in progress · November 26, 2026. Implementation is still on hold.
 
-[Read the v1 design](v1-design.md) for the proposed build scope, phone flow, MCP contract, and acceptance test. This architecture document also preserves earlier alternatives and research.
+[Read the v1 design](v1-design.md) for the current build scope and defaults. It takes precedence over earlier assumptions in this broader architecture and research record, including signup, agent count, activity, retention, and pilot hosting.
 
 ## What to build
 
