@@ -29,7 +29,7 @@ def main():
         except ValueError as error:
             parser.exit(1, f"{error}\n")
         uvicorn.run(create_app(config.database, config.port, staging=config), host="0.0.0.0",
-                    port=config.port, proxy_headers=False)
+                    port=config.port, proxy_headers=False, access_log=False)
     else:
         try:
             print(Store(args.db).issue_token(LOCAL_WORKSPACE, args.name))

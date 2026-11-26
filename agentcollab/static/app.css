@@ -26,8 +26,8 @@ p { line-height: 1.5; }
 .add { margin-bottom: 1rem; display: flex; gap: .65rem; align-items: end; flex-wrap: wrap; }
 .add > div { flex: 1 1 12rem; }
 label { display: block; margin-bottom: .35rem; font-size: .9rem; font-weight: 650; }
-input, button, .button { min-height: 2.75rem; font: inherit; border-radius: .5rem; padding: .55rem .8rem; }
-input { width: 100%; border: 1px solid #8b9e91; background: #fff; color: inherit; }
+input, select, button, .button { min-height: 2.75rem; font: inherit; border-radius: .5rem; padding: .55rem .8rem; }
+input, select { width: 100%; border: 1px solid #8b9e91; background: #fff; color: inherit; }
 button, .button { border: 1px solid var(--green); background: var(--green); color: #fff; cursor: pointer; font-weight: 650; }
 .button { display: inline-flex; align-items: center; text-decoration: none; }
 .secondary { color: var(--green); background: #fff; }
@@ -47,3 +47,5 @@ summary strong { overflow-wrap: anywhere; }
 .message { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
 .detail-label { color: var(--quiet); margin: 1rem 0 .35rem; }
 .error { color: #9a2e2e; }
+.consent { max-width: 28rem; }
+.consent select { display: block; margin-bottom: .8rem; }

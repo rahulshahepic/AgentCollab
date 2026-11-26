@@ -7,12 +7,17 @@ from dataclasses import dataclass, field
 from hashlib import sha256
 from hmac import compare_digest
 from pathlib import Path
+from urllib.parse import parse_qs
 
 from starlette.datastructures import Headers
-from starlette.responses import PlainTextResponse
+from starlette.responses import JSONResponse, PlainTextResponse
 
 STAGING_WORKSPACE = "railway-staging"
 RAILWAY_HEALTH_HOST = "healthcheck.railway.app"
+PUBLIC_PATHS = {
+    "/health", "/mcp", "/.well-known/oauth-protected-resource/mcp",
+    "/.well-known/oauth-authorization-server", "/register", "/token", "/revoke",
+}
 
 
 @dataclass(frozen=True)
@@ -74,7 +79,10 @@ class StagingBoundary:
         headers = Headers(scope=scope)
         if headers.get("host", "").split(":")[0] == RAILWAY_HEALTH_HOST and path != "/health":
             response = PlainTextResponse("Not found", status_code=404)
-        elif path in {"/health", "/mcp"}:
+        elif path == "/token" and scope["method"] == "POST":
+            await self.exchange(scope, headers, receive, send)
+            return
+        elif path in PUBLIC_PATHS:
             await self.app(scope, receive, send)
             return
         elif self.config.allows(headers.get("authorization", "")):
@@ -86,3 +94,34 @@ class StagingBoundary:
                 "Cache-Control": "no-store",
             })
         await response(scope, receive, send)
+
+    async def exchange(self, scope, headers, receive, send):
+        # The current MCP SDK does not validate RFC 8707's token-request resource.
+        content = bytearray()
+        while True:
+            event = await receive()
+            if event["type"] == "http.disconnect":
+                return
+            content.extend(event.get("body", b""))
+            if len(content) > 8192:
+                response = PlainTextResponse("Request too large", status_code=413)
+                await response(scope, receive, send)
+                return
+            if not event.get("more_body"):
+                break
+        try:
+            fields = parse_qs(content.decode(), keep_blank_values=True, max_num_fields=16)
+        except ValueError:
+            fields = {}
+        content_type = headers.get("content-type", "").partition(";")[0].strip().lower()
+        if content_type != "application/x-www-form-urlencoded" or fields.get("resource") != [
+            f"{self.config.origin}/mcp"
+        ]:
+            response = JSONResponse({"error": "invalid_target"}, status_code=400, headers={"Cache-Control": "no-store"})
+            await response(scope, receive, send)
+            return
+
+        async def replay():
+            return {"type": "http.request", "body": bytes(content), "more_body": False}
+
+        await self.app(scope, replay, send)
