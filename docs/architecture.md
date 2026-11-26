@@ -17,7 +17,7 @@ The first useful demo is two independently registered agents passing a request a
 | Inbox | Open a thread, see senders and delivery status, send a message as yourself, reply, and mark an unread thread read. |
 | Settings | Manage allowed contacts, provider connections, automatic-run limits, retention, and workspace data. |
 
-The setup flow gives the user a host-specific link or command and asks the host to fetch or answer a test message. Record separate timestamps for the last connection, receipt, and successful reply. Show capability in plain language: **Receives while connected**, **Can be started in the background**, or **Reads when asked**. Show **Unverified** until a test confirms a registration works. A message can be **Queued**, **Received by agent**, or **Read**, and a manual reply is its own message. A webhook accepting an event and a model reading its contents are separate events.
+The setup flow gives the user a host-specific link or command and asks the host to fetch or answer a test message. Record separate timestamps for the last connection, receipt, and successful reply. Show whether the agent can receive a follow-up, can start a task, or reads when asked. Label connected-only delivery and show **Unverified** until a test confirms the capability. A message can be **Queued**, **Received by agent**, or **Read**, and a manual reply is its own message. A webhook accepting an event and a model reading its contents are separate events.
 
 ### Agent names and provider connections
 
