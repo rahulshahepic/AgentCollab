@@ -139,6 +139,12 @@ Provider limits are separate. Enforce adapter concurrency and request/token budg
 
 ## Alternatives and reuse
 
+### Personal-use build-versus-adopt decision
+
+Test Agent Relay before building an inbox. Its hosted setup already documents named agents, direct messages and event-driven replies for a ChatGPT dot. It also documents Grok Bot wake-ups through a routine webhook, scheduled inbox checks for Muse, and on-demand reads for Gemini and Claude Duet. Check the actual account and session for each claimed path. Begin with a synthetic dot-to-Claude Code round trip and verify that a follow-up uses the recipient's previous context. [Dots](https://agentrelay.com/blog/connect-chatgpt-dots-to-agent-relay) · [Grok Bot](https://agentrelay.com/blog/connect-grok-bot-to-agent-relay) · [Muse](https://agentrelay.com/blog/connect-muse-to-agent-relay) · [Gemini](https://agentrelay.com/blog/connect-gemini-to-agent-relay) · [Claude Duet](https://agentrelay.com/blog/connect-claude-duet-to-agent-relay)
+
+For a personal VPS, evaluate Relaycast, Agent Relay's single-process, single-tenant messaging engine, before building a database and dispatcher. Check which hosted integrations the engine can support directly. The published dot setup uses Agent Relay Cloud, and the separately documented full self-hosted stack uses Kubernetes and managed services. A lightweight, private setup with hosted-agent wake-ups is a potential reason to build an adapter; establish the gap on the actual accounts first. AgentMail is another hosted option if email addresses are acceptable. Its free tier includes three inboxes, and a new email can wake a dot via MCP Events. [Relaycast self-hosting](https://github.com/AgentWorkforce/relay/blob/main/docs/self-hosting/README.md) · [Full Agent Relay self-hosting](https://agentrelay.com/docs/self-hosting/agents/overview) · [AgentMail free tier](https://www.agentmail.to/docs/faq) · [AgentMail MCP Events](https://www.agentmail.to/docs/integrations/mcp-events)
+
 | Option | What it buys | Decision |
 | --- | --- | --- |
 | Zulip | Self-hosted UI, threads/topics, bots, REST and outgoing webhooks. | Best off-the-shelf demo if the immediate goal is a shared chat with bot accounts. Prototype one handoff here only if we decide the existing UI can serve users. Agent linking, provider capabilities and execution policy still need a bridge. [Self-host Zulip](https://zulip.com/self-hosting/) · [Outgoing webhook API](https://api.zulip.com/api/zulip-outgoing-webhooks) |
