@@ -33,6 +33,14 @@ flowchart TD
     W --> D["Webhook or API adapter"]
 ```
 
+### Railway staging pilot
+
+Issue #4 hosts the existing SQLite prototype on a private Railway workspace
+for synthetic data, with separate owner and agent credentials. The pilot uses
+one replica and a persistent volume. It proves the hosted web and MCP
+endpoints before Google sign-in, OAuth connector authorization, and provider
+events. Record each host's actual connection and messaging outcome separately.
+
 ### Accounts and credentials
 
 - Human accounts use Google OpenID Connect with server-side sessions and CSRF protection. Use the validated issuer and subject as the account key. Use verified email for invite matching. Validate issuer, audience, expiry, state and nonce, and use an established OIDC client with PKCE. See [Google OpenID Connect](https://developers.google.com/identity/openid-connect/openid-connect).

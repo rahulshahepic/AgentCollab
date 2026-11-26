@@ -43,3 +43,27 @@ this slice.
 ```sh
 .venv/bin/python -m unittest discover -s tests
 ```
+
+## Private Railway staging
+
+Issue #4 uses an owner-only staging pilot with synthetic data. The service runs
+`python -m agentcollab serve-staging` from the reviewed `staging` branch.
+Generate a Railway HTTPS domain and attach a small private volume at `/data`.
+Railway provides the domain, volume mount path, environment name, and listener
+port. Configure `AGENTCOLLAB_OWNER_PASSWORD_SHA256` as the lowercase SHA-256
+hex digest of a randomly generated password with at least 32 characters. Keep
+the password in your password manager and out of GitHub. Enable Railway's
+**Wait for CI** setting on the staging source. Railway checks `/health` before
+routing traffic to the new deployment.
+
+At the staging HTTPS origin, sign in as `owner` with that password. In
+**Agents**, register each synthetic agent and select **Issue credential**.
+Copy the credential to a client that can set the `Authorization: Bearer`
+header for the HTTPS `/mcp` endpoint. Rotating or disconnecting that agent
+invalidates its previous credential. Keep the browser password and agent
+credentials separate.
+
+This pilot uses manually issued bearer credentials. A host that only supports
+an OAuth connection needs an OAuth integration before it can link. Record the
+actual Cosworth connection and synthetic message test separately from the
+generic MCP verification.
