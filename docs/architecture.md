@@ -141,7 +141,7 @@ Provider limits are separate. Enforce adapter concurrency and request/token budg
 
 ### Personal-use build-versus-adopt decision
 
-Setup for supported cloud agents must be possible from a phone or browser, and delivery must keep working with the user's computer off. A server or VPS can run the service. Keep any local-agent bridge optional. Test setup, first delivery, and a context-dependent reply with no desktop helper installed or running.
+A user with only a phone must be able to sign in, name and connect a supported cloud agent, approve access, and troubleshoot or revoke the connection from iOS or a mobile browser. This includes first-time setup and reconnecting after credentials expire. Agents must continue exchanging messages after the user closes both apps. A server or VPS runs the service. A local-agent bridge is optional. Test the entire flow with two hosted agents and only a phone, including a context-dependent reply.
 
 Evaluate Agent Relay on a hosted-to-hosted pair before building an inbox. Its published Claude Code web session discovery uses Agent Relay Desktop on a signed-in computer, so the dot-to-Claude Code web path does not establish this requirement. Its dot setup and ordinary Claude remote connector have hosted paths. A claimed cloud connection only counts if both setup and the closed-chat round trip pass without the desktop helper. [Agent Relay Claude connector and cloud session discovery](https://agentrelay.com/docs/claude-connector)
 
@@ -179,6 +179,8 @@ Pricing checked November 26, 2026. Compute prices exclude taxes, domain, any pai
 ### Deploy and recover
 
 Use a dedicated hostname, separate Compose services for the proxy, app, worker and database, and private networks. Keep provider runtimes outside the production host where practical. Only the proxy is public, and staging uses separate credentials and synthetic data. Check OAuth discovery, MCP and SSE through the actual edge. Exercise Cloudflare's machine-route behavior if enabled, and verify buffering, timeouts, challenge-free responses, and reconnect under real clients.
+
+Make the supported VPS deployment and recovery path operable from GitHub Actions and browser-accessible hosting controls. Cover first-time setup, updating or rolling back a release, rotating a secret, and restoring a backup without a local checkout, desktop app, or laptop. Verify those steps from a phone during the pilot.
 
 Monitor queue age, delivery failures, disk, database and worker health. Apply migrations with a compatibility window for rollback, and practice independently pausing dispatch while the inbox remains available. Verify backup restore, rollback and host capacity before inviting users. Deploy to staging first and require Rahul's approval for production.
 
