@@ -1,4 +1,4 @@
-"""Loopback-only web interface and MCP transport for the prototype."""
+"""Web interface and MCP transport for local preview and private staging."""
 
 from contextlib import asynccontextmanager
 from html import escape
@@ -12,6 +12,7 @@ from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 from pydantic import AnyHttpUrl
 from starlette.applications import Starlette
@@ -24,28 +25,32 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+from .staging import RAILWAY_HEALTH_HOST, STAGING_WORKSPACE, StagingBoundary, StagingConfig
 from .store import Store, StoreError
 
 
 LOCAL_WORKSPACE = "local-preview"
 
 
-class LocalTokens(TokenVerifier):
-    def __init__(self, store, resource):
+class WorkspaceTokens(TokenVerifier):
+    def __init__(self, store, resource, workspace):
         self.store = store
         self.resource = resource
+        self.workspace = workspace
 
     async def verify_token(self, token):
         identity = await run_in_threadpool(self.store.identity, token)
         if identity is None:
             return None
         agent_id, workspace = identity
+        if self.workspace is not None and workspace != self.workspace:
+            return None
         return AccessToken(token=token, client_id=agent_id, scopes=["message"],
                            subject=workspace, resource=self.resource)
 
 
-def create_mcp(store, port):
-    origin = f"http://127.0.0.1:{port}"
+def create_mcp(store, port, workspace, staging):
+    origin = staging.origin if staging else f"http://127.0.0.1:{port}"
     resource = f"{origin}/mcp"
     server = FastMCP(
         "AgentCollab",
@@ -54,10 +59,14 @@ def create_mcp(store, port):
         stateless_http=True,
         json_response=True,
         max_request_body_size=128 * 1024,
-        token_verifier=LocalTokens(store, resource),
+        token_verifier=WorkspaceTokens(store, resource, workspace if staging else None),
+        transport_security=TransportSecuritySettings(
+            allowed_hosts=[staging.host, f"{staging.host}:443"], allowed_origins=[origin],
+        ) if staging else None,
         auth=AuthSettings(
-            issuer_url=AnyHttpUrl(origin), resource_server_url=AnyHttpUrl(resource),
-            required_scopes=["message"], validate_token_resource=True,
+            issuer_url=AnyHttpUrl(origin),
+            resource_server_url=None if staging else AnyHttpUrl(resource),
+            required_scopes=["message"], validate_token_resource=staging is None,
         ),
     )
 
@@ -131,8 +140,8 @@ def page(section, body, *, status=200):
     })
 
 
-def activity_page(store):
-    transactions = store.activity(LOCAL_WORKSPACE)
+def activity_page(store, workspace):
+    transactions = store.activity(workspace)
     if not transactions:
         return page("Activity", '<div class="empty"><p>Messages between your agents will appear here.</p>'
                     '<a class="button" href="/agents#name">Add an agent</a></div>')
@@ -152,27 +161,34 @@ def activity_page(store):
     return page("Activity", '<section aria-label="Recent messages">' + "".join(rows) + '</section>')
 
 
-def agents_page(store, *, error=None):
+def agents_page(store, workspace, *, error=None):
     banner = f'<p class="error" role="alert">{escape(error)}</p>' if error else ""
     add = """<form class="add" method="post" action="/agents">
 <div><label for="name">Agent name</label><input id="name" name="name" required maxlength="60"></div>
 <button type="submit">Add agent</button></form>"""
     rows = []
-    for agent in store.list_agents(LOCAL_WORKSPACE):
+    for agent in store.list_agents(workspace):
         name, agent_id = escape(agent['name']), agent['id']
-        label = "Linked locally" if agent['linked'] else "Needs connection"
+        label = "Needs connection"
+        if agent["linked"]:
+            label = "Credential issued" if workspace == STAGING_WORKSPACE else "Linked locally"
+        token_form = ""
+        if workspace == STAGING_WORKSPACE:
+            token_form = f'''<form method="post" action="/agents/{agent_id}/credential">
+<button type="submit" class="secondary">{"Rotate credential" if agent["linked"] else "Issue credential"}</button>
+</form>'''
         rows.append(f"""<details class="agent"><summary><strong>{name}</strong><span class="status">{label}</span></summary>
 <div class="agent-detail"><form method="post" action="/agents/{agent_id}/rename">
 <label for="name-{agent_id}">Agent name</label><input id="name-{agent_id}" name="name" value="{name}" required maxlength="60">
 <button type="submit" class="secondary">Save name</button></form>
-<form method="post" action="/agents/{agent_id}/disconnect">
+{token_form}<form method="post" action="/agents/{agent_id}/disconnect">
 <button type="submit" class="secondary">Disconnect</button></form></div></details>""")
     content = banner + add + '<section aria-label="Registered agents">' + "".join(rows) + '</section>'
     return page("Agents", content, status=400 if error else 200)
 
 
-async def form_name(request):
-    if request.headers.get("origin") != f"http://{request.headers.get('host')}":
+async def form_name(request, origin):
+    if request.headers.get("origin") != origin:
         raise HTTPException(403)
     content = bytearray()
     async for chunk in request.stream():
@@ -185,9 +201,10 @@ async def form_name(request):
         raise HTTPException(400) from exc
 
 
-def create_app(database: Path, port: int = 8000):
+def create_app(database: Path, port: int = 8000, *, staging: StagingConfig | None = None):
+    workspace = STAGING_WORKSPACE if staging else LOCAL_WORKSPACE
     store = Store(database)
-    server = create_mcp(store, port)
+    server = create_mcp(store, port, workspace, staging)
     mcp_app = server.streamable_http_app()
 
     @asynccontextmanager
@@ -196,38 +213,61 @@ def create_app(database: Path, port: int = 8000):
             yield
 
     def activity(request: Request):
-        return activity_page(store)
+        return activity_page(store, workspace)
 
     async def agents(request: Request):
         if request.method == "GET":
-            return await run_in_threadpool(agents_page, store)
-        name = await form_name(request)
+            return await run_in_threadpool(agents_page, store, workspace)
+        name = await browser_form(request)
         return await change(store.add_agent, name)
 
     async def rename(request: Request):
-        return await change(store.rename, request.path_params['agent_id'], await form_name(request))
+        return await change(store.rename, request.path_params['agent_id'], await browser_form(request))
 
     async def disconnect(request: Request):
-        await form_name(request)
+        await browser_form(request)
         return await change(store.disconnect, request.path_params['agent_id'])
+
+    async def browser_form(request):
+        origin = staging.origin if staging else f"http://{request.headers.get('host')}"
+        return await form_name(request, origin)
+
+    async def credential(request: Request):
+        await browser_form(request)
+        try:
+            token = await run_in_threadpool(store.issue_token_for_agent, workspace, request.path_params["agent_id"])
+        except StoreError as exc:
+            return await run_in_threadpool(agents_page, store, workspace, error=str(exc))
+        headers = {"Cache-Control": "no-store"}
+        if request.headers.get("accept") == "application/json":
+            return JSONResponse({"token": token}, headers=headers)
+        return page("Agents", "<p>Copy this credential now. Issuing a new one invalidates it.</p>"
+                    f'<p><code>{escape(token)}</code></p><p><a href="/agents">Back to agents</a></p>')
 
     async def change(action, *arguments):
         try:
-            await run_in_threadpool(action, LOCAL_WORKSPACE, *arguments)
+            await run_in_threadpool(action, workspace, *arguments)
         except StoreError as exc:
-            return await run_in_threadpool(agents_page, store, error=str(exc))
+            return await run_in_threadpool(agents_page, store, workspace, error=str(exc))
         return RedirectResponse("/agents", status_code=303)
 
     def health(request: Request):
         return JSONResponse({"status": "ok"})
 
+    allowed_hosts = [staging.host, RAILWAY_HEALTH_HOST] if staging else ["localhost", "127.0.0.1"]
+    middleware = [Middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)]
+    hosted_routes = []
+    if staging:
+        middleware.append(Middleware(StagingBoundary, config=staging))
+        hosted_routes.append(Route("/agents/{agent_id}/credential", credential, methods=["POST"]))
     return Starlette(
         routes=[Route("/", activity), Route("/agents", agents, methods=["GET", "POST"]),
                 Route("/agents/{agent_id}/rename", rename, methods=["POST"]),
                 Route("/agents/{agent_id}/disconnect", disconnect, methods=["POST"]),
                 Route("/health", health),
+                *hosted_routes,
                 Mount("/static", StaticFiles(directory=Path(__file__).with_name("static"))),
                 Mount("/", app=mcp_app)],
         lifespan=lifespan,
-        middleware=[Middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1"])],
+        middleware=middleware,
     )

@@ -128,6 +128,13 @@ class Store:
                 raise StoreError("Add the agent on the Agents page first.")
         return token
 
+    def issue_token_for_agent(self, workspace, agent_id):
+        token = secrets.token_urlsafe(32)
+        with self.session(write=True) as db:
+            self.active_agent(db, workspace, agent_id)
+            db.execute("UPDATE agents SET token_hash = ? WHERE id = ?", (self.hash_token(token), agent_id))
+        return token
+
     @staticmethod
     def hash_token(token):
         return hashlib.sha256(token.encode()).hexdigest()
