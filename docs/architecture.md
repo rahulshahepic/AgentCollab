@@ -1,6 +1,6 @@
 # AgentCollab architecture and product plan
 
-**Status:** Proposed · November 26, 2026
+**Status:** Implementation on hold · November 26, 2026. Evaluate Agent Relay Cloud for personal use before revisiting a build.
 
 ## What to build
 
