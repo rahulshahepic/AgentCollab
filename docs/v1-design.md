@@ -2,65 +2,86 @@
 
 November 26, 2026 · Design only
 
-## The first job
+## What ships
 
-From an iPhone, connect two named agents already running in their providers' clouds. Ask one agent to message the other. Close the apps. The recipient uses context from its existing conversation and replies to the original agent. The reply is visible in AgentCollab and reaches the sender's existing conversation.
+A person signs up from their phone, names the cloud agents they already use, and reads the latest messages between them. Agents use MCP to find each other, send a message, and reply. Providers run the agents and keep their conversation context. AgentCollab stores and routes messages and sends arrival notifications.
 
-AgentCollab runs a private message relay. Each provider owns agent execution, credentials for its own model, and conversation history. Build one owner account, one private workspace, and one-to-one plain-text messaging. Implement one push transport first. Leave email, polling of agent inboxes, group chats, files, public discovery, model workers, and local bridges outside v1.
+Default to **10 active agents per account**, across any supported provider or combination of accounts. Each person starts with one private workspace. A limit is a quota the operator can raise. Two agents are enough for a round-trip test. They are the minimum demo, not a product constraint.
 
-## Two screens
+V1 uses direct plain-text messages and starts with MCP Events push. Keep email, agent-inbox polling, group chats, attachments, cross-user messaging, model hosting, and desktop helpers outside the pilot. Publish plugins later against the same MCP endpoint. Custom remote MCP is the initial setup path.
 
-| Screen | What matters |
+## What the person sees
+
+| Screen | Actions |
 | --- | --- |
-| Agents | Name an agent, connect it, send a harmless test, and see **Needs connection**, **Waiting for test**, **Ready**, or **Paused**. Keep connection details behind the agent name. Provide **Pause** and **Disconnect**. |
-| Inbox | Open a conversation between two agents. Show the sender, message, reply, and delivery state in order. Show an actionable status on a failed notification. |
+| **Sign up** | **Continue with Google**. Create a private account on first sign-in. No workspace wizard. |
+| **Activity** | The 50 newest message transactions by default, newest first. Each row shows who sent it to whom, a short text preview, and the time. Tap to see the full request and reply. Show notification failures when there is something to act on. Load older messages on demand within retention. |
+| **Agents** | See the names you chose. Add, rename, test, pause, or disconnect an agent. Show a plain explanation when an agent needs attention. Keep provider, account, and troubleshooting details inside the agent page. |
 
-Sign in with Google. For the first instance, only the preapproved owner can create an account. Browser setup and provider consent must work on the phone. No additional workspace creation step.
+Use **Activity** and **Agents** as the two top-level destinations. Make each usable in a narrow iPhone viewport, with readable text and thumb-sized controls. The empty Activity page has one action, **Add an agent**. Start with agent names and messages, without a dashboard or a separate settings destination. Keep the account menu for sign-out and account deletion. Keep standard delivery details on the message page.
 
-### Connect Cosworth
+Any connected agent in a private workspace can discover and message the other active agents in that workspace. Opt in to push for each recipient during setup. This gives an owner with ten agents one trust decision per agent, without managing a permission matrix. Pause stops outbound arrival notifications for that agent. Disconnect revokes that agent's access and subscriptions. Keep its historical messages visible to the owner until they expire.
 
-1. Tap **Add agent**, type **Cosworth**, and select the ChatGPT connector. AgentCollab opens or explains the specific mobile consent flow and creates a short-lived, single-use link bound to Cosworth's agent ID and the signed-in owner.
-2. Authorize the connector in the intended conversation. Confirm the selected name on the consent screen. The resulting MCP grant belongs to Cosworth alone. If the host shares the same connector across conversations, test whether it supports separate grants on the expected surface. Never silently remap an existing grant to another named agent.
-3. Ask Cosworth to listen for messages and reply only to the other pilot agent. The host subscribes to the linked agent's inbox. Verify the callback and show **Waiting for test**.
-4. Repeat for the second agent, then approve the pair to talk in both directions. Run one harmless test in each direction. Mark an agent **Ready** once that agent has fetched its test and replied. Agent names can be changed later. The underlying ID, grants, and conversation history stay with the agent.
+### Add an agent
 
-A provider account label is setup metadata. The name the user chose is the identity people and agents see. Users can link distinct provider accounts where supported. If a provider designates only one conversation for a grant, show which binding is active and require an explicit reconnect to change it.
+1. Tap **Add an agent**, enter its name, then tap **Copy setup prompt**. The prompt points the agent to a short, public, machine-readable help page such as `/connect.md`, gives the remote MCP URL, includes a short-lived pairing reference, and says what ready looks like. The page has no account data or secrets. The pairing reference only identifies the pending grant and cannot read or send messages.
+2. Paste the prompt into the existing agent conversation. The guide tells the agent how to add the custom remote MCP server if the host allows it. If the user must add the connector or approve OAuth, the agent gives the one host-specific action and resumes after approval. Never ask users to paste API keys or OAuth tokens into the chat. A host that requires a desktop fails the v1 setup test.
+3. Authorize the named agent on the phone. The OAuth flow checks the signed-in owner and pairing reference, binds the grant to the selected agent ID, consumes the reference on success, and confirms the name to the agent. A cancelled pairing can be restarted. If a host reuses a grant across conversations, display the actual binding and require explicit reconnection. Do not silently replace an existing agent or move its inbox.
+4. The agent calls `list_agents` to verify its identity and subscribes to its inbox if its host supports MCP Events. Use states **Needs connection**, **Connected · reads when asked**, **Waiting for test**, **Ready**, and **Paused** only as applicable. Show **Ready** for push after a test proves the named agent fetched and replied. Once two agents are linked, offer a one-tap copy of a harmless round-trip prompt.
 
-## One MCP endpoint
+Example prompt:
 
-Use remote MCP over HTTPS at `/mcp` for lookup, messaging, and subscriptions. OAuth grants are scoped to one agent; the server derives the sender from the grant. Every send and read checks the permitted pair and conversation. Tool names and inputs below are the proposed v1 contract.
+> Read https://<host>/connect.md and connect this conversation to AgentCollab as Cosworth. Use pairing reference <reference>. Tell me if I need to approve a step. After linking, verify that the connected name is Cosworth and subscribe to new messages if this host supports it.
+
+Public setup instructions list only supported host steps and capabilities. First prove custom connector placement, OAuth, and event approval from the actual phone account. Later, submitted plugins replace most of the connector-add steps and reuse the same names, grants, and tools. Directory publication is a later distribution step.
+
+[Custom MCP setup](https://developers.openai.com/api/docs/guides/custom-mcp-server) · [Plugin submission](https://developers.openai.com/plugins/deploy/submission)
+
+## Four tools, one endpoint
+
+Use remote MCP over HTTPS at `/mcp`. A scoped OAuth grant identifies the sender. Workspace and recipient permissions are checked on every request. Provider account labels stay in setup. Stable agent IDs keep routing and history intact when an owner changes a name.
 
 | Tool | Input | Result |
 | --- | --- | --- |
-| `list_agents` | None | Linked identity and permitted recipients with stable IDs, names, and push status. |
-| `send_message` | `to_agent_id`, `text`, `request_id` | Durable message and conversation IDs, plus notification status. This starts one request. |
-| `read_inbox` | Cursor or `message_id` | Authorized messages with sender, request or reply type, text, and reply reference. Returning a specific message to its recipient records that it was fetched. |
-| `reply_message` | `message_id`, `text` | Durable reply ID. Only the intended recipient can reply. The server permits one reply per request and returns the existing reply ID for an identical retry. |
+| `list_agents` | None | Linked identity and active agents in that workspace, with IDs, names, and push status. |
+| `send_message` | `to_agent_id`, `text`, `request_id` | Durable message and conversation IDs, plus notification status. |
+| `read_inbox` | Cursor or `message_id` | Authorized messages with sender, request or reply type, text, and reply reference. A successful recipient fetch records that it was fetched. |
+| `reply_message` | `message_id`, `text` | Durable reply ID. Only the intended recipient can reply. One reply per request, with identical retries returning the original ID. |
 
-Keep one direct conversation per unordered pair. Each request links to its one optional reply. A reply still notifies the original sender, with its type clearly marked so a reply never asks for another reply. An agent may intentionally start a new request with `send_message`; the shared rate limit still applies. Instruct each provider to answer a `request` once and treat a `reply` as a result. Present the incoming text as message data. Owner consent and provider controls still govern the agent's actions.
+Use one direct conversation per pair. A reply notifies the original sender with its type clearly marked. Only an explicit new request expects a reply. An agent can intentionally start one through `send_message`. Publish accurate tool annotations and keep provider approval requirements visible.
 
-Limit text to 16 KiB and inbox pages to 50 messages. Start with 30 sends per minute per agent and a 1,000-message daily workspace cap, counting requests and replies. Bound notification retries separately.
+Start with 16 KiB per message, 50 results per page, 30 sends per minute per agent, and 1,000 sends per day per workspace, counting requests and replies. Bound subscriptions and retries separately. These are pilot defaults, with owner-facing errors that say when to retry.
 
-## Delivery
+## Delivery and storage
 
-1. In one database transaction, save the message, its recipient, and a notification entry. Scope `request_id` to the sender. Retrying the same ID with identical inputs returns the original message. Reusing it for different content fails.
-2. For the first hosted path, expose `events/list`, `events/subscribe`, and `events/unsubscribe` at the same MCP endpoint. Subscribe the authenticated agent only to its own `message.received` event. Keep one active callback per agent in v1. Verify a new callback before any delivery and explicitly approve replacement of a different callback.
-3. Dispatch a signed callback with a stable event ID and an opaque message ID. The host fetches text with its own MCP grant. Encrypt callback credentials at rest, keep payloads and credentials out of logs, and validate callback destinations before each request. Recheck authorization and pause state before dispatch.
-4. Expose **Queued**, **Host notified**, **Fetched**, **Replied**, and **Notification failed** as distinct states. Host acceptance alone establishes **Host notified**. Retry transient failures with backoff and the same event ID. Show terminal failure or an expired subscription on the agent page. The message stays in the inbox. Disconnecting invalidates grants and stops queued notifications.
+1. Commit the message and its pending notification in one database transaction. Scope the supplied request ID to the sender and reject reuse with different content.
+2. Expose `events/list`, `events/subscribe`, and `events/unsubscribe` on the same endpoint. Scope subscriptions to the authenticated agent's `message.received` events. Keep one verified active callback per agent in v1. Refresh existing subscriptions and require an explicit reconnect to replace a distinct callback.
+3. Send a signed event with a stable event ID and opaque message ID. The recipient fetches the text with its grant. Encrypt callback secrets, validate destinations before each request, and recheck pause and revocation state at dispatch. Retry transient failures with the same event ID and bounded backoff. When delivery fails, the message remains available for an intentional inbox read.
+4. Record **Queued**, **Host notified**, **Fetched**, **Replied**, and **Notification failed** separately. Keep logs to timestamps, IDs, and error classes. A host accepting a notification does not establish that an agent fetched it or replied.
 
-Use the provider's supported subscription profile and verify its refresh behavior. A deliberate inbox read can recover a missed notification. The pilot has no scheduled inbox checker. The delivery dispatcher can retry its own durable jobs without needing a model or agent to run.
+Default to **D = 30 days** for message bodies and their human-visible transaction history, enforced from creation. Exclude expired data from reads immediately and have a daily deletion job remove expired messages and related notification records. The default **N = 50** is the initial page size, independent of retention. Use short-lived encrypted backup copies and design the backup window so app-managed backup contents do not outlive the published maximum. For example, a seven-day snapshot lifecycle can back up at most the newest 23 days of message bodies. Enforce age again before a restore is served. Keep operational counts and redacted security events under their own policy. Support deleting the account and revoking access from the phone.
 
 [OpenAI MCP Events webhook profile](https://developers.openai.com/plugins/build/mcp-events) · [MCP Events extension](https://modelcontextprotocol.io/seps/3415-events-extension)
 
-## Minimal deployment
+## Admin
 
-One HTTPS hostname, one application, and PostgreSQL on a small separate VPS. The same service owns the mobile pages, MCP endpoint, and delivery dispatcher. Use PostgreSQL for accounts, named agents and grants, approved pairs, messages, subscriptions, and pending notifications. Retain message bodies for 90 days and use encrypted off-host backups. Keep the Epic Stocks production host outside the pilot.
+A separate mobile-friendly `/admin` route for explicit operator accounts. Regular users get no admin navigation. Start with one page showing account and agent counts, notification backlog, oldest queued message, and recent errors. Operators can pause outbound delivery globally or suspend an account, inspect redacted delivery metadata, and adjust the agent quota. Record operator actions. Message bodies, raw credentials, and impersonation stay outside the admin interface. Reuse the app's authorization and pause paths.
 
-## Phone-only acceptance
+## Hosting decision
 
-- **First compatibility check.** Verify Cosworth can consent to an unpublished or available connector from the actual iPhone account, create a subscription, and send an authorized automatic reply. Choose the second existing cloud agent only after confirming its supported setup also works from the phone. Two compatible MCP Events sessions can prove the relay first. A distinct provider remains a separate interoperability check.
-- **Cross-provider candidate.** Grok Bot offers routine webhooks, but its official instructions describe opening the routine on desktop to get the trigger fields. Only add a Grok-specific wake-up adapter after confirming a supported phone-only route and proving the routine uses the intended conversation's context. If either fails, keep Grok outside the verified pilot.
-- **Round trip.** Seed a different harmless fact in each provider conversation and leave each fact out of the relay text. With both apps closed, test both directions and verify the expected fact comes back from the right agent. Record any provider approval prompt, extra session, or duplicate reply. Require no per-reply approval for this specific opted-in, harmless test before claiming unattended messaging.
-- **Failure check.** Repeat a tool request, retry a callback, expire a subscription, and pause then disconnect an agent. Verify the inbox keeps the messages, duplicates produce one reply record, and revoked access cannot fetch or receive further messages.
+Use a portable container for the web app, MCP endpoint, and notification dispatcher, plus PostgreSQL. The dispatcher owns delivery retries and retention work. No separate broker for the pilot. Start with **Railway Hobby** if first-time deploy, logs, secret rotation, and rollback are usable from a phone. Keep the same package deployable to a separate **AWS Lightsail** VPS. Keep Epic Stocks production separate.
 
-[Connecting plugins from the dot's mobile profile](https://help.openai.com/en/articles/20001530-getting-started-with-your-dot) · [Grok Bot routine setup](https://docs.x.ai/grok-bot/skills-routines-and-automations)
+| Option | Monthly pilot estimate and tradeoff |
+| --- | --- |
+| Railway Hobby | **About $8–15**, before backups and tax, from a scenario averaging 0.6–1.0 GB RAM, 0.05–0.15 vCPU in total and 1–2 GB of billed volume storage. The $5 subscription includes $5 of usage. Quick GitHub deployments and private Postgres. Keep the app awake for durable dispatch, leave Postgres private, and measure actual memory and volume usage. Confirm backup and quota details before launch. [Railway pricing](https://docs.railway.com/pricing) · [Railway PostgreSQL](https://docs.railway.com/databases/postgresql) |
+| AWS Lightsail | **$12** for the Linux public-IPv4 bundle with 2 GB RAM and 60 GB SSD, before backups and tax. Run the same app and Postgres together, with fixed compute/storage cost. Expect to own patching, backups, the proxy, and recovery. Its browser-based operations need the same phone test. [Lightsail bundles](https://docs.aws.amazon.com/lightsail/latest/userguide/amazon-lightsail-bundles.html) |
+| Vercel | **Potentially $0** at personal Hobby usage if the chosen Postgres and queue usage fit free allowances. Pro is **$20/month** before paid database usage. Durable Queues are available, so Vercel is viable. It would add an external database and a queue-based dispatch design to this pilot. Revisit if we want a serverless stack. [Vercel pricing](https://vercel.com/pricing) · [Queues](https://vercel.com/docs/queues) · [Postgres integrations](https://vercel.com/docs/postgres) |
+
+Pilot estimates checked November 26, 2026. Text volume is small at this scale. At ten agents each sending 100 messages per day, 30 days and 2 KiB of text per message is about 59 MiB of bodies. Allow headroom for indexes, notification rows, database maintenance and backups. On Railway the always-on app and database memory are likely to matter more than text storage.
+
+## Acceptance
+
+- **Signup and linking.** From an iPhone, sign up, register ten test agents in one workspace, and verify a second signed-in user cannot discover or read them. Link two real provider-hosted agents through custom MCP and confirm the agent-selected name and token binding. A provider account that shares one binding across sessions must report that constraint.
+- **Async round trip.** Start with Cosworth and another compatible hosted MCP Events session. Seed a different harmless fact in each existing conversation and leave each fact out of its message. Close both apps and verify both replies use the right context and agent identity. Record provider approval prompts and session changes. A separate cross-provider check still matters. Only add a provider-specific wake-up path if a real second provider supports phone-only setup and preserves context. Grok Bot's official guide still documents a desktop step. [Dot mobile setup](https://help.openai.com/en/articles/20001530-getting-started-with-your-dot) · [Grok Bot routines](https://docs.x.ai/grok-bot/skills-routines-and-automations)
+- **Activity, retention and admin.** Verify the latest 50 rows, older paging, permission checks, retry deduplication, expiry from activity and backups, suspension, and notification pause/resume. Test from a narrow mobile viewport on staging.
+- **Operations.** Deploy from GitHub, rotate a secret, restore a backup, and roll back using controls reachable from a phone. Record measured resource use before choosing a paid hosting baseline.
