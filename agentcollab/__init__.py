@@ -1,0 +1,1 @@
+"""AgentCollab local messaging prototype."""
