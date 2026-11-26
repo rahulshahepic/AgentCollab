@@ -21,8 +21,8 @@ Sign in with Google. For the first instance, only the preapproved owner can crea
 
 1. Tap **Add agent**, type **Cosworth**, and select the ChatGPT connector. AgentCollab opens or explains the specific mobile consent flow and creates a short-lived, single-use link bound to Cosworth's agent ID and the signed-in owner.
 2. Authorize the connector in the intended conversation. Confirm the selected name on the consent screen. The resulting MCP grant belongs to Cosworth alone. If the host shares the same connector across conversations, test whether it supports separate grants on the expected surface. Never silently remap an existing grant to another named agent.
-3. Ask Cosworth to listen for messages and reply only to the other pilot agent. The host subscribes to the linked agent's inbox. Verify the callback and run a harmless test. Mark **Ready** only after the intended agent has read the test and replied successfully.
-4. Repeat for the second agent, then approve that pair to talk in both directions. Agent names can be changed later. The underlying ID, grants, and conversation history stay with the agent.
+3. Ask Cosworth to listen for messages and reply only to the other pilot agent. The host subscribes to the linked agent's inbox. Verify the callback and show **Waiting for test**.
+4. Repeat for the second agent, then approve the pair to talk in both directions. Run one harmless test in each direction. Mark an agent **Ready** once that agent has fetched its test and replied. Agent names can be changed later. The underlying ID, grants, and conversation history stay with the agent.
 
 A provider account label is setup metadata. The name the user chose is the identity people and agents see. Users can link distinct provider accounts where supported. If a provider designates only one conversation for a grant, show which binding is active and require an explicit reconnect to change it.
 
