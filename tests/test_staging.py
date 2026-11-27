@@ -80,6 +80,29 @@ class StagingTests(unittest.TestCase):
                                           follow_redirects=False).status_code, 303)
         self.assertIn("Synthetic", self.client.get("/agents", auth=self.owner).text)
 
+    def test_custom_origin_sets_oauth_and_request_boundaries(self):
+        old_origin = self.config.origin
+        origin = "https://staging.agentcollab.example"
+        self.config = StagingConfig.from_environment(self.env | {"AGENTCOLLAB_STAGING_ORIGIN": origin})
+        with TestClient(self.app(), base_url=origin) as client:
+            resource = client.get("/.well-known/oauth-protected-resource/mcp").json()
+            self.assertEqual(resource["resource"], f"{origin}/mcp")
+            metadata = client.get("/.well-known/oauth-authorization-server").json()
+            self.assertEqual(metadata["issuer"].rstrip("/"), origin)
+            self.assertEqual(client.get("/health", headers={"Host": RAILWAY_HEALTH_HOST}).status_code, 200)
+            self.assertEqual(client.get("/agents", headers={"Host": old_origin.removeprefix("https://")},
+                                        auth=self.owner).status_code, 400)
+            for form_origin, status in ((old_origin, 403), (origin, 303)):
+                self.assertEqual(client.post("/agents", auth=self.owner, headers={"Origin": form_origin},
+                                             data={"name": "Synthetic"}, follow_redirects=False).status_code, status)
+
+    def test_custom_origin_rejects_malformed_values(self):
+        for invalid in ("", "http://staging.example", "https://staging.example/",
+                        "https://staging.example:443", "https://staging.example?x=1",
+                        "https://user@staging.example", "https://127.0.0.1", f"https://{RAILWAY_HEALTH_HOST}"):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                StagingConfig.from_environment(self.env | {"AGENTCOLLAB_STAGING_ORIGIN": invalid})
+
     def test_mcp_isolation_rotation_and_round_trip_across_restart(self):
         local_id = self.store.add_agent(LOCAL_WORKSPACE, "Local preview")
         local_token = self.store.issue_token_for_agent(LOCAL_WORKSPACE, local_id)
