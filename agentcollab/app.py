@@ -1,5 +1,6 @@
 """Web interface and MCP transport for local preview and private staging."""
 
+from asyncio import TaskGroup
 from contextlib import asynccontextmanager
 from html import escape
 from pathlib import Path
@@ -26,6 +27,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from .accounts import OwnerAccounts, SESSION_COOKIE, SESSION_SECONDS, return_path
+from .events import InboxEvents
 from .oauth import SCOPE, StagingOAuth, redirect_provider
 from .staging import RAILWAY_HEALTH_HOST, STAGING_WORKSPACE, StagingBoundary, StagingConfig
 from .store import AGENT_PROVIDERS, Store, StoreError
@@ -51,7 +53,7 @@ class WorkspaceTokens(TokenVerifier):
                            subject=workspace, resource=self.resource)
 
 
-def create_mcp(store, port, staging, oauth):
+def create_mcp(store, port, staging, oauth, events=None):
     origin = staging.origin if staging else f"http://127.0.0.1:{port}"
     resource = f"{origin}/mcp"
     server = FastMCP(
@@ -84,8 +86,8 @@ def create_mcp(store, port, staging, oauth):
         workspace, agent_id = caller()
         agents = store.list_agents(workspace)
         return {
-            "identity": next((public_agent(agent) for agent in agents if agent['id'] == agent_id), None),
-            "agents": [public_agent(agent) for agent in agents if agent['id'] != agent_id and agent['linked']],
+            "identity": next((public_agent(agent, events) for agent in agents if agent['id'] == agent_id), None),
+            "agents": [public_agent(agent, events) for agent in agents if agent['id'] != agent_id and agent['linked']],
         }
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
@@ -128,8 +130,9 @@ def invoke(action, *args, **kwargs):
         raise ToolError(str(exc)) from exc
 
 
-def public_agent(agent):
-    return {"id": agent['id'], "name": agent['name'], "push": False}
+def public_agent(agent, events):
+    return {"id": agent["id"], "name": agent["name"],
+            "push": events is not None and events.has_subscription(agent["id"])}
 
 
 def page(section, body, *, status=200):
@@ -224,13 +227,26 @@ def create_app(database: Path, port: int = 8000, *, staging: StagingConfig | Non
     if staging and (staging.local_accounts or staging.owner_setup_code):
         accounts = OwnerAccounts(store, staging.owner_setup_code, staging.owner_setup_expires)
     oauth = StagingOAuth(store, f"{staging.origin}/mcp") if staging else None
-    server = create_mcp(store, port, staging, oauth)
+    events = (
+        InboxEvents(store, oauth, staging.event_hosts, staging.event_key)
+        if staging and staging.event_hosts else None
+    )
+    server = create_mcp(store, port, staging, oauth, events)
     mcp_app = server.streamable_http_app()
+    if events:
+        for route in mcp_app.routes:
+            if route.path == "/mcp":
+                route.app = events.wrap(route.app)
 
     @asynccontextmanager
     async def lifespan(app):
-        async with server.session_manager.run():
-            yield
+        async with server.session_manager.run(), TaskGroup() as tasks:
+            worker = tasks.create_task(events.run()) if events else None
+            try:
+                yield
+            finally:
+                if worker:
+                    worker.cancel()
 
     def activity(request: Request):
         return activity_page(store, workspace, can_sign_out=accounts is not None)

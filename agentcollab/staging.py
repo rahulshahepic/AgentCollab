@@ -9,6 +9,7 @@ from hmac import compare_digest
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode
 
+from cryptography.fernet import Fernet
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import Headers
 from starlette.requests import Request
@@ -33,6 +34,8 @@ class StagingConfig:
     owner_setup_code: str = field(default="", repr=False)
     owner_setup_expires: int = 0
     local_accounts: bool = False
+    event_hosts: tuple[str, ...] = ()
+    event_key: str = field(default="", repr=False)
 
     @property
     def host(self):
@@ -62,7 +65,17 @@ class StagingConfig:
         local_accounts = env.get("AGENTCOLLAB_LOCAL_ACCOUNTS") == "1"
         if not local_accounts and not code and not re.fullmatch(r"[a-f0-9]{64}", password_hash):
             raise ValueError("Configure the SHA-256 hash of a randomly generated owner password.")
-        return cls(f"https://{domain}", port, volume / "agentcollab-staging.sqlite3", password_hash, code, int(expires or 0), local_accounts)
+        event_hosts = tuple(env.get("AGENTCOLLAB_EVENT_CALLBACK_HOSTS", "").split())
+        event_key = env.get("AGENTCOLLAB_EVENT_ENCRYPTION_KEY", "")
+        if event_hosts:
+            if not all(re.fullmatch(r"(?:[a-z0-9][a-z0-9-]*\.)+[a-z][a-z0-9-]*", host) for host in event_hosts):
+                raise ValueError("MCP Events requires exact HTTPS callback hostnames.")
+            try:
+                Fernet(event_key)
+            except (ValueError, Error) as exc:
+                raise ValueError("Configure a Fernet key for MCP Events signing secrets.") from exc
+        return cls(f"https://{domain}", port, volume / "agentcollab-staging.sqlite3", password_hash,
+                   code, int(expires or 0), local_accounts, event_hosts, event_key)
 
     def allows(self, authorization):
         scheme, _, encoded = authorization.partition(" ")

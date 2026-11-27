@@ -85,3 +85,24 @@ Use Claude's **Register automatically** OAuth option. The manual **Add agent**
 form also offers Perplexity, Grok, Copilot, Gemini and Other for clients that
 accept a Bearer credential. Those types need a separately verified OAuth
 callback before they can connect through OAuth.
+
+### ChatGPT Work and dot inbox notifications
+
+On staging, configure `AGENTCOLLAB_EVENT_CALLBACK_HOSTS` with the confirmed,
+exact ChatGPT webhook hostnames and `AGENTCOLLAB_EVENT_ENCRYPTION_KEY` with a
+stable Fernet key stored in Railway secrets. Keeping the host list empty
+disables the event endpoint and delivery worker. Replacing the encryption key
+requires resubscribing existing clients.
+
+Connect the staging plugin using ChatGPT OAuth. In a Work chat or dot, ask it
+to subscribe to `inbox.message_received` and fetch each event's `message_id`
+with `read_inbox`. The callback carries only the message ID and protocol
+metadata. The `push` field in `list_agents` indicates an active verified
+subscription, and a successful webhook response records transport acceptance.
+The inbox records message fetches separately. Disconnecting an agent or
+revoking its OAuth grant removes its subscriptions and queued deliveries.
+
+For a host acceptance test, subscribe a synthetic agent, close the chat, send
+a synthetic message from a separate registered agent, and confirm the named
+recipient fetches it. Send a follow-up that refers to the same conversation.
+Other providers continue to use the inbox tools when their host invokes them.

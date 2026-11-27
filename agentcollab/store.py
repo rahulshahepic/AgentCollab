@@ -71,6 +71,30 @@ class Store:
                     access_expires INTEGER NOT NULL,
                     grant_expires INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS event_subscriptions (
+                    id TEXT PRIMARY KEY,
+                    client_id TEXT NOT NULL REFERENCES oauth_grants(client_id) ON DELETE CASCADE,
+                    agent_id TEXT NOT NULL REFERENCES agents(id),
+                    url TEXT NOT NULL,
+                    secret BLOB NOT NULL,
+                    expires INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS event_agent ON event_subscriptions(agent_id);
+                CREATE TABLE IF NOT EXISTS event_outbox (
+                    subscription_id TEXT NOT NULL REFERENCES event_subscriptions(id) ON DELETE CASCADE,
+                    message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    next_attempt INTEGER NOT NULL,
+                    PRIMARY KEY(subscription_id, message_id)
+                );
+                CREATE INDEX IF NOT EXISTS event_due ON event_outbox(next_attempt);
+                CREATE TRIGGER IF NOT EXISTS enqueue_inbox_event AFTER INSERT ON messages
+                BEGIN
+                    INSERT INTO event_outbox (subscription_id, message_id, next_attempt)
+                    SELECT s.id, NEW.id, unixepoch() FROM event_subscriptions s
+                    JOIN oauth_grants g ON g.client_id = s.client_id AND g.agent_id = s.agent_id
+                    WHERE s.agent_id = NEW.recipient AND s.expires > unixepoch() AND g.grant_expires > unixepoch();
+                END;
             """)
             db.execute("BEGIN IMMEDIATE")
             if not any(row["name"] == "provider" for row in db.execute("PRAGMA table_info(agents)")):

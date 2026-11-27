@@ -1,13 +1,20 @@
 import base64
 import hashlib
+import hmac
+import json
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
+from cryptography.fernet import Fernet
 from starlette.testclient import TestClient
 
 from agentcollab.app import LOCAL_WORKSPACE, create_app
+from agentcollab.events import EVENT, InboxEvents
+from agentcollab.oauth import StagingOAuth
 from agentcollab.staging import STAGING_WORKSPACE, StagingConfig
 from agentcollab.store import Store
 
@@ -75,6 +82,86 @@ class StagingOAuthTests(unittest.TestCase):
         result = response.json()["result"]
         self.assertFalse(result.get("isError"), result)
         return result["structuredContent"]
+
+    def test_chatgpt_events_are_agent_scoped_and_retry_with_the_same_id(self):
+        signing_key = b"s" * 32
+        callback_host = "receiver.example.com"
+        callback = f"https://{callback_host}/mcp-events/main"
+        key = Fernet.generate_key()
+        deliveries = []
+
+        def receive(url, headers, body):
+            self.assertEqual(url, callback)
+            event_id = headers["webhook-id"]
+            signed = f"{event_id}.{headers['webhook-timestamp']}.".encode() + body
+            expected = base64.b64encode(hmac.digest(signing_key, signed, "sha256")).decode()
+            self.assertEqual(headers["webhook-signature"], f"v1,{expected}")
+            event = json.loads(body)
+            if event.get("type") == "verification":
+                return 200, json.dumps({"challenge": event["challenge"]}).encode()
+            deliveries.append(event)
+            return (503 if len(deliveries) == 1 else 204), b""
+
+        async def idle(worker):
+            pass
+
+        with patch.object(InboxEvents, "post", side_effect=receive), patch.object(InboxEvents, "run", idle):
+            config = replace(self.config, event_hosts=(callback_host,), event_key=key.decode())
+            app = create_app(config.database, 3000, staging=config)
+            with TestClient(app, base_url=self.origin, follow_redirects=False) as client:
+                self.client = client
+                oauth_client = self.register().json()["client_id"]
+                approved = self.consent(self.authorize(oauth_client).headers["location"])
+                code = parse_qs(urlsplit(approved.headers["location"]).query)["code"][0]
+                grant = self.exchange(oauth_client, code).json()
+                token = grant["access_token"]
+
+                def call(method, params=None, bearer=token):
+                    headers = {"Accept": "application/json, text/event-stream"}
+                    if bearer:
+                        headers["Authorization"] = f"Bearer {bearer}"
+                    return client.post("/mcp", headers=headers, json={
+                        "jsonrpc": "2.0", "id": 1, "method": method, "params": params or {},
+                    })
+
+                discover = call("initialize", {"protocolVersion": "2025-11-25", "capabilities": {},
+                                               "clientInfo": {"name": "Test", "version": "1"}})
+                self.assertIn("events", discover.json()["result"]["capabilities"])
+                self.assertEqual(call("events/list", bearer=None).status_code, 401)
+                self.assertEqual(call("events/list", bearer=self.other_token).json()["error"]["code"], -32601)
+                self.assertEqual(call("events/list").json()["result"]["events"][0]["name"], EVENT)
+                options = {"name": EVENT, "arguments": {}, "delivery": {
+                    "mode": "webhook", "url": callback,
+                    "secret": "whsec_" + base64.b64encode(signing_key).decode(),
+                }}
+                wrong = options | {"delivery": options["delivery"] | {"url": "https://other.example.com/events"}}
+                self.assertEqual(call("events/subscribe", wrong).json()["error"]["code"], -32015)
+                sub = call("events/subscribe", options).json()["result"]["id"]
+                self.assertEqual(call("events/subscribe", options).json()["result"]["id"], sub)
+                self.assertTrue(self.result(self.rpc(token))["identity"]["push"])
+                sent = self.result(self.rpc(self.other_token, "send_message", to_agent_id=self.agent,
+                                            text="synthetic message", request_id="push-test"))
+                dispatcher = InboxEvents(self.store, StagingOAuth(self.store, self.resource), (callback_host,), key,
+                                         transport=receive)
+                self.assertTrue(dispatcher.dispatch_one())
+                self.assertFalse(dispatcher.dispatch_one())
+                with self.store.session(write=True) as db:
+                    db.execute("UPDATE event_outbox SET next_attempt = unixepoch()")
+                self.assertTrue(dispatcher.dispatch_one())
+                self.assertEqual(deliveries[0], deliveries[1])
+                self.assertEqual(deliveries[0]["data"], {"message_id": sent["message_id"]})
+                self.assertFalse(dispatcher.dispatch_one())
+
+                self.assertEqual(call("events/unsubscribe", options).json()["result"], {})
+                self.assertEqual(call("events/unsubscribe", options).json()["result"], {})
+                self.assertFalse(self.result(self.rpc(token))["identity"]["push"])
+                call("events/subscribe", options)
+                self.result(self.rpc(self.other_token, "send_message", to_agent_id=self.agent,
+                                     text="second message", request_id="revoke-test"))
+                with self.store.session(write=True) as db:
+                    db.execute("DELETE FROM oauth_grants WHERE client_id = ?", (oauth_client,))
+                    self.assertEqual(db.execute("SELECT count(*) FROM event_outbox").fetchone()[0], 0)
+                self.assertFalse(dispatcher.dispatch_one())
 
     def test_muse_oauth_callback_requires_an_exact_match(self):
         self.redirect = "https://agent.meta.ai/api/hatch/oauth/callback"
