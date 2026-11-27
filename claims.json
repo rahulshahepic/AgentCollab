@@ -6,7 +6,7 @@
       "batch": "milestone-8-issue-11",
       "mode": "manual",
       "branch": "codex/m8-issue-11-staging-signoff",
-      "pr": null,
+      "pr": 15,
       "expires_at": null
     }
   }
