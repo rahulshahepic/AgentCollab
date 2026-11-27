@@ -8,6 +8,14 @@
       "branch": "codex/agent-provider-consent",
       "pr": 20,
       "expires_at": null
+    },
+    "21": {
+      "owner": "chatgpt-push-1795760857403",
+      "batch": "issue-21-chatgpt-mcp-events",
+      "mode": "manual",
+      "branch": "codex/chatgpt-mcp-events",
+      "pr": null,
+      "expires_at": null
     }
   }
 }
