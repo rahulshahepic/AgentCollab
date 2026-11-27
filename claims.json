@@ -1,4 +1,13 @@
 {
   "version": 1,
-  "claims": {}
+  "claims": {
+    "10": {
+      "owner": "codex-work-20261127-045039-m8",
+      "batch": "milestone-8-issue-10",
+      "mode": "manual",
+      "branch": "codex/m8-issue-10-smoke",
+      "pr": null,
+      "expires_at": null
+    }
+  }
 }
