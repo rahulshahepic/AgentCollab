@@ -1,12 +1,12 @@
 {
   "version": 1,
   "claims": {
-    "10": {
+    "11": {
       "owner": "codex-work-20261127-045039-m8",
-      "batch": "milestone-8-issue-10",
+      "batch": "milestone-8-issue-11",
       "mode": "manual",
-      "branch": "codex/m8-issue-10-smoke",
-      "pr": 14,
+      "branch": "codex/m8-issue-11-staging-signoff",
+      "pr": null,
       "expires_at": null
     }
   }
