@@ -76,6 +76,32 @@ class StagingOAuthTests(unittest.TestCase):
         self.assertFalse(result.get("isError"), result)
         return result["structuredContent"]
 
+    def test_muse_oauth_callback_requires_an_exact_match(self):
+        self.redirect = "https://agent.meta.ai/api/hatch/oauth/callback"
+        for other in (
+            self.redirect + "?target=elsewhere",
+            self.redirect + "/",
+            self.redirect.replace("agent.meta.ai", "agent.meta.ai.example"),
+            self.redirect.replace("https:", "http:"),
+        ):
+            with self.subTest(redirect=other):
+                response = self.register(other)
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.json()["error"], "invalid_redirect_uri")
+
+        registered = self.register()
+        self.assertEqual(registered.status_code, 201)
+        client_id = registered.json()["client_id"]
+        authorize = self.authorize(client_id)
+        self.assertEqual(authorize.status_code, 302)
+        approved = self.consent(authorize.headers["location"])
+        callback = urlsplit(approved.headers["location"])
+        self.assertEqual(callback._replace(query="").geturl(), self.redirect)
+        code = parse_qs(callback.query)["code"][0]
+        token = self.exchange(client_id, code)
+        self.assertEqual(token.status_code, 200)
+        self.assertEqual(self.result(self.rpc(token.json()["access_token"]))["identity"]["name"], "Cosworth")
+
     def test_owner_consent_produces_one_agent_and_rotating_tokens(self):
         anonymous = self.rpc()
         self.assertEqual(anonymous.status_code, 401)
