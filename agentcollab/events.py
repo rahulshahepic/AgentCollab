@@ -291,8 +291,6 @@ class InboxEvents:
         if not isinstance(url, str):
             return fail(-32602, "A callback URL is required.")
         if method == "events/unsubscribe":
-            if self.discovery_only:
-                return respond(result={})
             return respond(result=await run_in_threadpool(self.unsubscribe, token, self.subscription_id(token, url)))
         secret = delivery.get("secret")
         if not isinstance(secret, str) or not secret.startswith("whsec_"):

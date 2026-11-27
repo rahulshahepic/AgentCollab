@@ -88,6 +88,14 @@ class StagingOAuthTests(unittest.TestCase):
         approved = self.consent(self.authorize(oauth_client).headers["location"])
         code = parse_qs(urlsplit(approved.headers["location"]).query)["code"][0]
         token = self.exchange(oauth_client, code).json()["access_token"]
+        callback = "https://receiver.example.com/synthetic-path?private=value"
+        old_subscription_id = "sub_" + hashlib.sha256(f"{oauth_client}\n{self.agent}\n{callback}".encode()).hexdigest()
+        with self.store.session(write=True) as db:
+            db.execute("""
+                INSERT INTO event_subscriptions (id, client_id, agent_id, url, secret, expires)
+                VALUES (?, ?, ?, ?, ?, unixepoch() + 300)
+            """, (old_subscription_id, oauth_client, self.agent, callback, b"sealed synthetic secret"))
+        self.store.send(STAGING_WORKSPACE, self.other, self.agent, "synthetic queued message", "discovery-unsubscribe")
         config = replace(self.config, event_discovery_only=True)
         app = create_app(config.database, 3000, staging=config)
         headers = {"Authorization": f"Bearer {token}", "Accept": "application/json, text/event-stream"}
@@ -103,7 +111,7 @@ class StagingOAuthTests(unittest.TestCase):
                 with self.assertLogs("agentcollab.events") as logs:
                     result = call(client, "events/subscribe", {
                         "name": EVENT, "arguments": {}, "delivery": {
-                            "mode": "webhook", "url": "https://receiver.example.com/synthetic-path?private=value",
+                            "mode": "webhook", "url": callback,
                             "secret": "whsec_" + base64.b64encode(b"s" * 32).decode(),
                         },
                     })
@@ -111,10 +119,17 @@ class StagingOAuthTests(unittest.TestCase):
                 self.assertEqual(logs.output, [
                     "WARNING:agentcollab.events:ChatGPT event callback discovery: receiver.example.com"
                 ])
+                self.assertEqual(call(client, "events/unsubscribe", {
+                    "name": EVENT, "arguments": {}, "delivery": {"mode": "webhook", "url": callback},
+                })["result"], {})
             outbound.assert_not_called()
             worker.assert_not_called()
         with self.store.session() as db:
             self.assertEqual(db.execute("SELECT count(*) FROM event_subscriptions").fetchone()[0], 0)
+            self.assertEqual(db.execute("SELECT count(*) FROM event_outbox").fetchone()[0], 0)
+        resumed = InboxEvents(self.store, StagingOAuth(self.store, self.resource),
+                              ("receiver.example.com",), Fernet.generate_key())
+        self.assertFalse(resumed.dispatch_one())
 
     def test_chatgpt_events_are_agent_scoped_and_retry_with_the_same_id(self):
         signing_key = b"s" * 32
