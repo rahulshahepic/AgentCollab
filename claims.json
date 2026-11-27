@@ -16,6 +16,14 @@
       "branch": "codex/provider-callback-policy",
       "pr": 24,
       "expires_at": null
+    },
+    "26": {
+      "owner": "pilot-origin-1795787008025",
+      "batch": "issue-26-pilot-origin",
+      "mode": "manual",
+      "branch": "codex/pilot-staging-origin",
+      "pr": null,
+      "expires_at": null
     }
   }
 }
