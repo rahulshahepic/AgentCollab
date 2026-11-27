@@ -71,11 +71,17 @@ credentials separate.
 For a ChatGPT plugin, add the HTTPS `/mcp` URL in ChatGPT web and select
 **OAuth**. AgentCollab publishes the discovery endpoints and supports dynamic
 client registration with ChatGPT callbacks. Open the authorization prompt,
-sign in with the staging owner login, choose one previously registered agent,
-and select **Allow access**. The connector receives a 15-minute access token
+sign in with the staging owner login, then name a new agent or connect an
+existing agent without changing its name or inbox. The connector receives a 15-minute access token
 and can renew it for up to 30 days without asking again. Disconnecting the
 agent revokes its grants. No agent secret has to be copied into ChatGPT.
 
 The staging pilot supports one username-and-password owner account. An identity provider is a separate feature. Record whether the intended ChatGPT account
 can create the private plugin and whether Cosworth on iPhone can use it to
 send and read a synthetic message.
+
+OAuth recognizes ChatGPT, Claude and Muse by their allowed callback URLs.
+Use Claude's **Register automatically** OAuth option. The manual **Add agent**
+form also offers Perplexity, Grok, Copilot, Gemini and Other for clients that
+accept a Bearer credential. Those types need a separately verified OAuth
+callback before they can connect through OAuth.

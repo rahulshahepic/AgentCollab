@@ -30,7 +30,16 @@ GRANT_SECONDS = 30 * 24 * 60 * 60
 CHATGPT_REDIRECT = re.compile(
     r"https://chatgpt\.com/(?:connector_platform_oauth_redirect|connector/oauth/[A-Za-z0-9_-]{1,128})"
 )
-MUSE_REDIRECT = "https://agent.meta.ai/api/hatch/oauth/callback"
+EXACT_REDIRECT_PROVIDERS = {
+    "https://agent.meta.ai/api/hatch/oauth/callback": "muse",
+    "https://claude.ai/api/mcp/auth_callback": "claude",
+}
+
+
+def redirect_provider(uri):
+    if CHATGPT_REDIRECT.fullmatch(uri):
+        return "chatgpt"
+    return EXACT_REDIRECT_PROVIDERS.get(uri)
 
 
 class AgentRefresh(RefreshToken):
@@ -55,6 +64,9 @@ class StagingOAuth:
         return urlsafe_b64encode(hmac_digest(self.signing_key, message, "sha256")).decode().rstrip("=")
 
     async def get_client(self, client_id):
+        return self.registered_client(client_id)
+
+    def registered_client(self, client_id):
         if len(client_id) > 1024:
             return None
         payload, _, signature = client_id.partition(".")
@@ -70,10 +82,9 @@ class StagingOAuth:
 
     async def register_client(self, client):
         redirects = [str(uri) for uri in client.redirect_uris or []]
-        if not redirects or len(redirects) > 2 or any(
-            uri != MUSE_REDIRECT and not CHATGPT_REDIRECT.fullmatch(uri) for uri in redirects
-        ):
-            raise RegistrationError("invalid_redirect_uri", "Use a supported ChatGPT or Muse OAuth callback.")
+        providers = {redirect_provider(uri) for uri in redirects}
+        if not redirects or len(redirects) > 2 or None in providers or len(providers) != 1:
+            raise RegistrationError("invalid_redirect_uri", "Use a supported callback for one provider.")
         method = client.token_endpoint_auth_method
         if method not in {"none", "client_secret_post", "client_secret_basic"}:
             raise RegistrationError("invalid_client_metadata", "Unsupported client authentication method.")
@@ -112,18 +123,47 @@ class StagingOAuth:
             row = self.unexpired(db, "oauth_requests", self.store.hash_token(handle))
         return PendingConsent.model_validate_json(row["data"]) if row else None
 
-    def consent(self, handle, agent_id, approved):
+    def compatible_agent(self, db, agent, provider):
+        if agent["provider"] not in ("", "other", provider):
+            return False
+        grants = db.execute(
+            "SELECT client_id FROM oauth_grants WHERE agent_id = ? AND grant_expires > ?",
+            (agent["id"], time()),
+        )
+        for grant in grants:
+            client = self.registered_client(grant["client_id"])
+            if client is None or {redirect_provider(str(uri)) for uri in client.redirect_uris} != {provider}:
+                return False
+        return True
+
+    def compatible_agents(self, workspace, provider):
+        agents = self.store.list_agents(workspace)
+        with self.store.session() as db:
+            return [agent for agent in agents if self.compatible_agent(db, agent, provider)]
+
+    def consent(self, handle, agent_id, approved, name=""):
         digest = self.store.hash_token(handle)
         with self.store.session(write=True) as db:
             row = self.unexpired(db, "oauth_requests", digest)
             if not row:
-                raise StoreError("This consent request has expired. Reconnect from ChatGPT.")
+                raise StoreError("This consent request has expired. Reconnect from your agent provider.")
             pending = PendingConsent.model_validate_json(row["data"])
             params = pending.params
             db.execute("DELETE FROM oauth_requests WHERE digest = ?", (digest,))
             if not approved:
                 return construct_redirect_uri(str(params.redirect_uri), state=params.state, error="access_denied")
-            self.store.active_agent(db, STAGING_WORKSPACE, agent_id)
+            provider = redirect_provider(str(params.redirect_uri))
+            if provider is None:
+                raise StoreError("This OAuth callback is unavailable.")
+            if agent_id and name.strip():
+                raise StoreError("Choose an existing agent or name a new one.")
+            if agent_id:
+                agent = self.store.active_agent(db, STAGING_WORKSPACE, agent_id)
+                if not self.compatible_agent(db, agent, provider):
+                    raise StoreError("Choose an agent for this provider.")
+                db.execute("UPDATE agents SET provider = ? WHERE id = ?", (provider, agent_id))
+            else:
+                agent_id = self.store.insert_agent(db, STAGING_WORKSPACE, name, provider)
             code = token_urlsafe(32)
             now = time()
             record = AuthorizationCode(
@@ -151,16 +191,21 @@ class StagingOAuth:
         def exchange():
             digest = self.store.hash_token(authorization_code.code)
             now = int(time())
-            with self.store.session(write=True) as db:
-                if not self.unexpired(db, "oauth_codes", digest):
-                    raise TokenError("invalid_grant", "Authorization code is no longer valid.")
-                db.execute("DELETE FROM oauth_codes WHERE digest = ?", (digest,))
-                db.execute("DELETE FROM oauth_grants WHERE grant_expires <= ?", (now,))
-                try:
-                    self.store.active_agent(db, STAGING_WORKSPACE, authorization_code.subject)
-                except StoreError as exc:
-                    raise TokenError("invalid_grant", "Agent connection was revoked.") from exc
-                return self.issue(db, client.client_id, authorization_code.subject, now, now + GRANT_SECONDS)
+            try:
+                with self.store.session(write=True) as db:
+                    if not self.unexpired(db, "oauth_codes", digest):
+                        raise StoreError("Authorization code is no longer valid.")
+                    agent = self.store.active_agent(db, STAGING_WORKSPACE, authorization_code.subject)
+                    provider = redirect_provider(str(authorization_code.redirect_uri))
+                    if provider is None or not self.compatible_agent(db, agent, provider):
+                        raise StoreError("Agent is no longer available for this provider.")
+                    db.execute("DELETE FROM oauth_codes WHERE digest = ?", (digest,))
+                    db.execute("DELETE FROM oauth_grants WHERE grant_expires <= ?", (now,))
+                    if agent["provider"] != provider:
+                        db.execute("UPDATE agents SET provider = ? WHERE id = ?", (provider, agent["id"]))
+                    return self.issue(db, client.client_id, agent["id"], now, now + GRANT_SECONDS)
+            except StoreError as exc:
+                raise TokenError("invalid_grant", str(exc)) from exc
         return await run_in_threadpool(exchange)
 
     def issue(self, db, client_id, agent_id, now, grant_expires):
