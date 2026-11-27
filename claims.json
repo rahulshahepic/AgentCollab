@@ -14,7 +14,7 @@
       "batch": "issue-19-provider-consent",
       "mode": "manual",
       "branch": "codex/agent-provider-consent",
-      "pr": null,
+      "pr": 20,
       "expires_at": null
     }
   }
