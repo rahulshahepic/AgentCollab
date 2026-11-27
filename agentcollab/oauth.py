@@ -64,6 +64,9 @@ class StagingOAuth:
         return urlsafe_b64encode(hmac_digest(self.signing_key, message, "sha256")).decode().rstrip("=")
 
     async def get_client(self, client_id):
+        return self.registered_client(client_id)
+
+    def registered_client(self, client_id):
         if len(client_id) > 1024:
             return None
         payload, _, signature = client_id.partition(".")
@@ -120,6 +123,24 @@ class StagingOAuth:
             row = self.unexpired(db, "oauth_requests", self.store.hash_token(handle))
         return PendingConsent.model_validate_json(row["data"]) if row else None
 
+    def compatible_agent(self, db, agent, provider):
+        if agent["provider"] not in ("", "other", provider):
+            return False
+        grants = db.execute(
+            "SELECT client_id FROM oauth_grants WHERE agent_id = ? AND grant_expires > ?",
+            (agent["id"], time()),
+        )
+        for grant in grants:
+            client = self.registered_client(grant["client_id"])
+            if client is None or {redirect_provider(str(uri)) for uri in client.redirect_uris} != {provider}:
+                return False
+        return True
+
+    def compatible_agents(self, workspace, provider):
+        agents = self.store.list_agents(workspace)
+        with self.store.session() as db:
+            return [agent for agent in agents if self.compatible_agent(db, agent, provider)]
+
     def consent(self, handle, agent_id, approved, name=""):
         digest = self.store.hash_token(handle)
         with self.store.session(write=True) as db:
@@ -138,7 +159,7 @@ class StagingOAuth:
                 raise StoreError("Choose an existing agent or name a new one.")
             if agent_id:
                 agent = self.store.active_agent(db, STAGING_WORKSPACE, agent_id)
-                if agent["provider"] not in ("", provider):
+                if not self.compatible_agent(db, agent, provider):
                     raise StoreError("Choose an agent for this provider.")
                 db.execute("UPDATE agents SET provider = ? WHERE id = ?", (provider, agent_id))
             else:

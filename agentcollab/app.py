@@ -324,10 +324,10 @@ def create_app(database: Path, port: int = 8000, *, staging: StagingConfig | Non
         if provider is None:
             return page("Connect an agent", "<p>This request has expired. Reconnect from your agent provider.</p>", status=400)
         label = AGENT_PROVIDERS[provider]
-        agents = await run_in_threadpool(store.list_agents, workspace)
+        agents = await run_in_threadpool(oauth.compatible_agents, workspace, provider)
         options = "".join(
             f'<option value="{agent["id"]}">{escape(agent["name"])}</option>'
-            for agent in agents if agent["provider"] in ("", provider)
+            for agent in agents
         )
         request_field = f'<input type="hidden" name="request" value="{escape(handle)}">'
         banner = f'<p class="error" role="alert">{escape(error)}</p>' if error else ""

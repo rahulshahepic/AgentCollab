@@ -133,6 +133,26 @@ class StagingOAuthTests(unittest.TestCase):
         self.assertNotIn("Research Claude", self.client.get(chatgpt, auth=self.owner).text)
         self.assertEqual(self.consent(chatgpt, agent=self.agent).status_code, 400)
 
+    def test_legacy_oauth_grant_blocks_rebinding_to_a_different_provider(self):
+        client_id = self.register().json()["client_id"]
+        consent = self.consent(self.authorize(client_id).headers["location"])
+        code = parse_qs(urlsplit(consent.headers["location"]).query)["code"][0]
+        token = self.exchange(client_id, code).json()["access_token"]
+        with self.store.session(write=True) as db:
+            db.execute("ALTER TABLE agents DROP COLUMN provider")
+        Store(self.config.database)
+
+        self.redirect = "https://claude.ai/api/mcp/auth_callback"
+        rejected = self.authorize(self.register().json()["client_id"]).headers["location"]
+        self.assertNotIn("Cosworth", self.client.get(rejected, auth=self.owner).text)
+        self.assertEqual(self.consent(rejected, agent=self.agent).status_code, 400)
+        self.assertEqual(self.result(self.rpc(token))["identity"]["name"], "Cosworth")
+
+        self.redirect = "https://chatgpt.com/connector/oauth/synthetic"
+        allowed = self.authorize(self.register().json()["client_id"]).headers["location"]
+        self.assertIn("Cosworth", self.client.get(allowed, auth=self.owner).text)
+        self.assertEqual(self.consent(allowed, agent=self.agent).status_code, 303)
+
     def test_registration_keeps_callbacks_on_one_provider(self):
         result = self.client.post("/register", json={
             "redirect_uris": [self.redirect, "https://claude.ai/api/mcp/auth_callback"],
