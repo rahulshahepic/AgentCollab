@@ -8,6 +8,14 @@
       "branch": "codex/muse-oauth-callback",
       "pr": 18,
       "expires_at": null
+    },
+    "19": {
+      "owner": "muse-callback-1795758854704",
+      "batch": "issue-19-provider-consent",
+      "mode": "manual",
+      "branch": "codex/agent-provider-consent",
+      "pr": null,
+      "expires_at": null
     }
   }
 }
