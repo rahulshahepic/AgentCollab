@@ -2,16 +2,12 @@
   "version": 1,
   "claims": {
     "9": {
-      "owner": "recovery-checkpoint-1795751579764",
+      "owner": "manual-fixture-retry-1795752473049",
       "batch": "milestone-8-issue-9",
       "mode": "automated",
       "branch": "codex/m8-issue-9-staging-fixture",
       "pr": 13,
-      "expires_at": "2026-11-27T03:57:59.999Z",
-      "hold": {
-        "blocker": "Railway requires interactive action to apply the staging-only fixture patch. The pending one-time setup code expired and needs refresh before enrollment.",
-        "evidence": "https://github.com/rahulshahepic/AgentCollab/issues/9#issuecomment-7209348265"
-      }
+      "expires_at": "2026-11-27T04:12:53.657Z"
     }
   }
 }
