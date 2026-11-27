@@ -1,14 +1,6 @@
 {
   "version": 1,
   "claims": {
-    "17": {
-      "owner": "muse-callback-1795758854704",
-      "batch": "issue-17-muse-callback",
-      "mode": "manual",
-      "branch": "codex/muse-oauth-callback",
-      "pr": 18,
-      "expires_at": null
-    },
     "19": {
       "owner": "muse-callback-1795758854704",
       "batch": "issue-19-provider-consent",
