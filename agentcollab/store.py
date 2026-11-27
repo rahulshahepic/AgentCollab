@@ -85,6 +85,7 @@ class Store:
                     message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
                     attempts INTEGER NOT NULL DEFAULT 0,
                     next_attempt INTEGER NOT NULL,
+                    last_error TEXT NOT NULL DEFAULT '',
                     PRIMARY KEY(subscription_id, message_id)
                 );
                 CREATE INDEX IF NOT EXISTS event_due ON event_outbox(next_attempt);
@@ -99,6 +100,8 @@ class Store:
             db.execute("BEGIN IMMEDIATE")
             if not any(row["name"] == "provider" for row in db.execute("PRAGMA table_info(agents)")):
                 db.execute("ALTER TABLE agents ADD COLUMN provider TEXT NOT NULL DEFAULT ''")
+            if not any(row["name"] == "last_error" for row in db.execute("PRAGMA table_info(event_outbox)")):
+                db.execute("ALTER TABLE event_outbox ADD COLUMN last_error TEXT NOT NULL DEFAULT ''")
 
     @contextmanager
     def session(self, *, write=False):

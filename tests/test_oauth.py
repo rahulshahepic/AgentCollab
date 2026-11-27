@@ -89,6 +89,7 @@ class StagingOAuthTests(unittest.TestCase):
         callback = f"https://{callback_host}/mcp-events/main"
         key = Fernet.generate_key()
         deliveries = []
+        outage = False
 
         def receive(url, headers, body):
             self.assertEqual(url, callback)
@@ -100,7 +101,7 @@ class StagingOAuthTests(unittest.TestCase):
             if event.get("type") == "verification":
                 return 200, json.dumps({"challenge": event["challenge"]}).encode()
             deliveries.append(event)
-            return (503 if len(deliveries) == 1 else 204), b""
+            return (503 if outage or len(deliveries) == 1 else 204), b""
 
         async def idle(worker):
             pass
@@ -151,6 +152,32 @@ class StagingOAuthTests(unittest.TestCase):
                 self.assertEqual(deliveries[0], deliveries[1])
                 self.assertEqual(deliveries[0]["data"], {"message_id": sent["message_id"]})
                 self.assertFalse(dispatcher.dispatch_one())
+
+                outage = True
+                failed = self.result(self.rpc(self.other_token, "send_message", to_agent_id=self.agent,
+                                              text="never shown in the delivery log", request_id="outage-test"))
+                for _ in range(5):
+                    with self.store.session(write=True) as db:
+                        db.execute("UPDATE event_outbox SET next_attempt = unixepoch()")
+                    self.assertTrue(dispatcher.dispatch_one())
+                restarted = Store(config.database)
+                dispatcher = InboxEvents(restarted, StagingOAuth(restarted, self.resource),
+                                         (callback_host,), key, transport=receive)
+                self.assertFalse(dispatcher.dispatch_one())
+                self.assertEqual(dispatcher.failures(STAGING_WORKSPACE)[0]["message_id"], failed["message_id"])
+                self.assertEqual(dispatcher.failures(LOCAL_WORKSPACE), [])
+                page = client.get("/agents", auth=self.owner)
+                self.assertIn("HTTP 503", page.text)
+                self.assertNotIn("never shown in the delivery log", page.text)
+                retry = {"subscription": sub, "message": failed["message_id"]}
+                self.assertEqual(client.post("/agents/retry-delivery", auth=self.owner, data=retry).status_code, 403)
+                self.assertEqual(client.post("/agents/retry-delivery", auth=self.owner, data=retry,
+                                             headers={"Origin": self.origin}).status_code, 303)
+                outage = False
+                old_event = deliveries[-1]
+                self.assertTrue(dispatcher.dispatch_one())
+                self.assertEqual(deliveries[-1], old_event)
+                self.assertEqual(dispatcher.failures(STAGING_WORKSPACE), [])
 
                 self.assertEqual(call("events/unsubscribe", options).json()["result"], {})
                 self.assertEqual(call("events/unsubscribe", options).json()["result"], {})

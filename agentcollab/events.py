@@ -23,6 +23,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
 
 from .oauth import SCOPE, redirect_provider
+from .store import StoreError
 
 EVENT = "inbox.message_received"
 METHODS = {"events/list", "events/subscribe", "events/unsubscribe"}
@@ -168,6 +169,38 @@ class InboxEvents:
                        (subscription_id, token.client_id, token.claims["agent_id"]))
         return {}
 
+    def failures(self, workspace):
+        with self.store.session() as db:
+            return db.execute("""
+                SELECT j.message_id, j.subscription_id, j.last_error, a.name, m.created
+                FROM event_outbox j
+                JOIN event_subscriptions s ON s.id = j.subscription_id
+                JOIN messages m ON m.id = j.message_id
+                JOIN agents a ON a.id = s.agent_id
+                JOIN oauth_grants g ON g.client_id = s.client_id AND g.agent_id = s.agent_id
+                WHERE j.attempts >= 5 AND m.workspace = ? AND s.expires > unixepoch()
+                AND g.grant_expires > unixepoch()
+                AND m.created > strftime('%Y-%m-%dT%H:%M:%fZ','now','-30 days')
+                ORDER BY m.created DESC, j.message_id LIMIT 50
+            """, (workspace,)).fetchall()
+
+    def retry(self, workspace, subscription_id, message_id):
+        with self.store.session(write=True) as db:
+            result = db.execute("""
+                UPDATE event_outbox SET attempts = 0, last_error = '', next_attempt = unixepoch()
+                WHERE subscription_id = ? AND message_id = ? AND attempts >= 5
+                AND EXISTS (
+                    SELECT 1 FROM event_subscriptions s
+                    JOIN oauth_grants g ON g.client_id = s.client_id AND g.agent_id = s.agent_id
+                    JOIN messages m ON m.id = event_outbox.message_id AND m.recipient = s.agent_id
+                    WHERE s.id = event_outbox.subscription_id AND m.workspace = ?
+                    AND s.expires > unixepoch() AND g.grant_expires > unixepoch()
+                    AND m.created > strftime('%Y-%m-%dT%H:%M:%fZ','now','-30 days')
+                )
+            """, (subscription_id, message_id, workspace))
+            if not result.rowcount:
+                raise StoreError("This failed delivery is no longer available to retry.")
+
     def dispatch_one(self):
         now = int(time())
         with self.store.session(write=True) as db:
@@ -177,7 +210,8 @@ class InboxEvents:
                 JOIN event_subscriptions s ON s.id = j.subscription_id
                 JOIN oauth_grants g ON g.client_id = s.client_id AND g.agent_id = s.agent_id
                 JOIN messages m ON m.id = j.message_id
-                WHERE j.next_attempt <= ? AND g.grant_expires > ?
+                WHERE j.next_attempt <= ? AND g.grant_expires > ? AND j.attempts < 5
+                AND m.created > strftime('%Y-%m-%dT%H:%M:%fZ','now','-30 days')
                 ORDER BY j.next_attempt, j.message_id LIMIT 1
             """, (now, now)).fetchone()
             if job is None:
@@ -188,22 +222,27 @@ class InboxEvents:
                        (now + 60, *key))
         event_id = "evt_" + hashlib.sha256(":".join(key).encode()).hexdigest()
         attempt = job["attempts"] + 1
-        accepted = False
+        failure = ""
         try:
             status, _ = self.signed_post(job["url"], self.encryption.decrypt(job["secret"]), key[0], event_id,
                                          {"eventId": event_id, "name": EVENT, "timestamp": job["created"],
                                           "data": {"message_id": key[1]}, "cursor": None})
-            accepted = 200 <= status < 300
-        except (CallbackError, InvalidToken, ValueError):
-            pass
+            if not 200 <= status < 300:
+                failure = f"HTTP {status}"
+        except CallbackError as exc:
+            failure = str(exc)
+        except InvalidToken:
+            failure = "signing_key_unavailable"
+        except ValueError:
+            failure = "invalid_callback"
         with self.store.session(write=True) as db:
-            if accepted or attempt >= 5:
+            if not failure:
                 db.execute("DELETE FROM event_outbox WHERE subscription_id = ? AND message_id = ?", key)
             else:
-                db.execute("""UPDATE event_outbox SET attempts = ?, next_attempt = ?
+                db.execute("""UPDATE event_outbox SET attempts = ?, next_attempt = ?, last_error = ?
                               WHERE subscription_id = ? AND message_id = ?""",
-                           (attempt, int(time()) + 15 * 2 ** (attempt - 1), *key))
-        if not accepted and attempt >= 5:
+                           (attempt, int(time()) + 15 * 2 ** (attempt - 1), failure, *key))
+        if failure and attempt >= 5:
             LOGGER.warning("Inbox event delivery exhausted its retries")
         return True
 

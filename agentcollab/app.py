@@ -175,7 +175,7 @@ def activity_page(store, workspace, *, can_sign_out=False):
     return page("Activity", '<section aria-label="Recent messages">' + "".join(rows) + '</section>' + sign_out)
 
 
-def agents_page(store, workspace, *, error=None):
+def agents_page(store, workspace, *, error=None, events=None):
     banner = f'<p class="error" role="alert">{escape(error)}</p>' if error else ""
     provider_options = "".join(f'<option value="{key}">{label}</option>' for key, label in AGENT_PROVIDERS.items())
     add = f"""<form class="add" method="post" action="/agents">
@@ -205,6 +205,18 @@ def agents_page(store, workspace, *, error=None):
 {token_form}<form method="post" action="/agents/{agent_id}/disconnect">
 <button type="submit" class="secondary">Disconnect</button></form></div></details>""")
     content = banner + add + '<section aria-label="Registered agents">' + "".join(rows) + '</section>'
+    if events:
+        failures = events.failures(workspace)
+        if failures:
+            items = []
+            for row in failures:
+                items.append(f"""<li><p><strong>{escape(row['name'])}</strong> ·
+{escape(row['created'])} · {escape(row['last_error'].replace('_', ' '))}</p>
+<form method="post" action="/agents/retry-delivery">
+<input type="hidden" name="subscription" value="{escape(row['subscription_id'])}">
+<input type="hidden" name="message" value="{escape(row['message_id'])}">
+<button type="submit" class="secondary">Retry delivery</button></form></li>""")
+            content += '<section><h2>Failed push deliveries</h2><ul>' + "".join(items) + '</ul></section>'
     return page("Agents", content, status=400 if error else 200)
 
 
@@ -253,9 +265,13 @@ def create_app(database: Path, port: int = 8000, *, staging: StagingConfig | Non
 
     async def agents(request: Request):
         if request.method == "GET":
-            return await run_in_threadpool(agents_page, store, workspace)
+            return await run_in_threadpool(agents_page, store, workspace, events=events)
         form = await browser_fields(request)
         return await change(store.add_agent, form.get("name", [""])[0], form.get("provider", [""])[0])
+
+    async def retry_delivery(request: Request):
+        form = await browser_fields(request)
+        return await change(events.retry, form.get("subscription", [""])[0], form.get("message", [""])[0])
 
     async def rename(request: Request):
         return await change(store.rename, request.path_params['agent_id'], await browser_form(request))
@@ -278,7 +294,7 @@ def create_app(database: Path, port: int = 8000, *, staging: StagingConfig | Non
         try:
             token = await run_in_threadpool(store.issue_token_for_agent, workspace, request.path_params["agent_id"])
         except StoreError as exc:
-            return await run_in_threadpool(agents_page, store, workspace, error=str(exc))
+            return await run_in_threadpool(agents_page, store, workspace, error=str(exc), events=events)
         headers = {"Cache-Control": "no-store"}
         if request.headers.get("accept") == "application/json":
             return JSONResponse({"token": token}, headers=headers)
@@ -394,7 +410,7 @@ def create_app(database: Path, port: int = 8000, *, staging: StagingConfig | Non
         try:
             await run_in_threadpool(action, workspace, *arguments)
         except StoreError as exc:
-            return await run_in_threadpool(agents_page, store, workspace, error=str(exc))
+            return await run_in_threadpool(agents_page, store, workspace, error=str(exc), events=events)
         return RedirectResponse("/agents", status_code=303)
 
     def health(request: Request):
@@ -409,6 +425,8 @@ def create_app(database: Path, port: int = 8000, *, staging: StagingConfig | Non
             Route("/agents/{agent_id}/credential", credential, methods=["POST"]),
             Route("/oauth/consent", oauth_consent, methods=["GET", "POST"]),
         ])
+    if events:
+        hosted_routes.append(Route("/agents/retry-delivery", retry_delivery, methods=["POST"]))
     if accounts:
         hosted_routes.extend([
             Route("/login", account_page, methods=["GET", "POST"]),

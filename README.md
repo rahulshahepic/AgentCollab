@@ -106,3 +106,8 @@ For a host acceptance test, subscribe a synthetic agent, close the chat, send
 a synthetic message from a separate registered agent, and confirm the named
 recipient fetches it. Send a follow-up that refers to the same conversation.
 Other providers continue to use the inbox tools when their host invokes them.
+
+When five attempts fail, the staging owner can review the recipient, message
+time, and error category under **Failed push deliveries** on the Agents page.
+Retry requeues the same event ID. The log excludes message bodies and callback
+credentials.
