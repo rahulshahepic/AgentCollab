@@ -13,8 +13,8 @@
       "owner": "chatgpt-push-1795760857403",
       "batch": "issue-21-chatgpt-mcp-events",
       "mode": "manual",
-      "branch": "codex/chatgpt-mcp-events",
-      "pr": 22,
+      "branch": "codex/chatgpt-callback-discovery",
+      "pr": 23,
       "expires_at": null
     }
   }
