@@ -49,3 +49,7 @@ summary strong { overflow-wrap: anywhere; }
 .error { color: #9a2e2e; }
 .consent { max-width: 28rem; }
 .consent select { display: block; margin-bottom: .8rem; }
+.owner-login { max-width: 28rem; }
+.owner-login input { margin-bottom: .85rem; }
+.owner-login button { display: block; }
+.sign-out { margin-top: 1rem; }
