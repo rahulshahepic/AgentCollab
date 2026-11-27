@@ -2,12 +2,12 @@
   "version": 1,
   "claims": {
     "9": {
-      "owner": "eb2f6375-5944-832c-8ea4-638b5fd01507",
+      "owner": "3cfe28e5-5868-832a-a222-531744eb8405",
       "batch": "milestone-8-issue-9",
       "mode": "automated",
       "branch": "codex/m8-issue-9-staging-fixture",
       "pr": 13,
-      "expires_at": "2026-11-27T02:17:56.980Z"
+      "expires_at": "2026-11-27T02:23:21.026Z"
     }
   }
 }
