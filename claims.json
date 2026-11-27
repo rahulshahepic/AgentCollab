@@ -7,7 +7,11 @@
       "mode": "automated",
       "branch": "codex/m8-issue-9-staging-fixture",
       "pr": 13,
-      "expires_at": "2026-11-27T03:57:59.999Z"
+      "expires_at": "2026-11-27T03:57:59.999Z",
+      "hold": {
+        "blocker": "Railway requires interactive action to apply the staging-only fixture patch. The pending one-time setup code expired and needs refresh before enrollment.",
+        "evidence": "https://github.com/rahulshahepic/AgentCollab/issues/9#issuecomment-7209348265"
+      }
     }
   }
 }
