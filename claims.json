@@ -1,13 +1,4 @@
 {
   "version": 1,
-  "claims": {
-    "11": {
-      "owner": "codex-work-20261127-045039-m8",
-      "batch": "milestone-8-issue-11",
-      "mode": "manual",
-      "branch": "codex/m8-issue-11-browser-forms",
-      "pr": 16,
-      "expires_at": null
-    }
-  }
+  "claims": {}
 }
