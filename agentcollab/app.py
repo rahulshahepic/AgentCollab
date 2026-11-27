@@ -144,7 +144,9 @@ def page(section, body, *, status=200):
 <nav aria-label="Main navigation">{nav}</nav></div></header>
 <main><h1>{section}</h1>{body}</main></body></html>""", status_code=status, headers={
         "Cache-Control": "no-store", "Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'",
-        "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff",
+        # Chromium needs a same-origin referrer policy to send Origin on HTML form POSTs.
+        "Referrer-Policy": "same-origin",
     })
 
 
