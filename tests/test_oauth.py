@@ -83,6 +83,39 @@ class StagingOAuthTests(unittest.TestCase):
         self.assertFalse(result.get("isError"), result)
         return result["structuredContent"]
 
+    def test_callback_discovery_logs_only_hostname_without_sending(self):
+        oauth_client = self.register().json()["client_id"]
+        approved = self.consent(self.authorize(oauth_client).headers["location"])
+        code = parse_qs(urlsplit(approved.headers["location"]).query)["code"][0]
+        token = self.exchange(oauth_client, code).json()["access_token"]
+        config = replace(self.config, event_discovery_only=True)
+        app = create_app(config.database, 3000, staging=config)
+        headers = {"Authorization": f"Bearer {token}", "Accept": "application/json, text/event-stream"}
+
+        def call(client, method, params):
+            return client.post("/mcp", headers=headers, json={
+                "jsonrpc": "2.0", "id": 1, "method": method, "params": params,
+            }).json()
+
+        with patch.object(InboxEvents, "post") as outbound, patch.object(InboxEvents, "run") as worker:
+            with TestClient(app, base_url=self.origin) as client:
+                self.assertEqual(call(client, "events/list", {})["result"]["events"][0]["name"], EVENT)
+                with self.assertLogs("agentcollab.events") as logs:
+                    result = call(client, "events/subscribe", {
+                        "name": EVENT, "arguments": {}, "delivery": {
+                            "mode": "webhook", "url": "https://receiver.example.com/synthetic-path?private=value",
+                            "secret": "whsec_" + base64.b64encode(b"s" * 32).decode(),
+                        },
+                    })
+                self.assertEqual(result["error"]["data"]["reason"], "staging_callback_discovery")
+                self.assertEqual(logs.output, [
+                    "WARNING:agentcollab.events:ChatGPT event callback discovery: receiver.example.com"
+                ])
+            outbound.assert_not_called()
+            worker.assert_not_called()
+        with self.store.session() as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM event_subscriptions").fetchone()[0], 0)
+
     def test_chatgpt_events_are_agent_scoped_and_retry_with_the_same_id(self):
         signing_key = b"s" * 32
         callback_host = "receiver.example.com"

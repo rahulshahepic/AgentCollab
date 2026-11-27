@@ -240,8 +240,8 @@ def create_app(database: Path, port: int = 8000, *, staging: StagingConfig | Non
         accounts = OwnerAccounts(store, staging.owner_setup_code, staging.owner_setup_expires)
     oauth = StagingOAuth(store, f"{staging.origin}/mcp") if staging else None
     events = (
-        InboxEvents(store, oauth, staging.event_hosts, staging.event_key)
-        if staging and staging.event_hosts else None
+        InboxEvents(store, oauth, staging.event_hosts, staging.event_key, discovery_only=staging.event_discovery_only)
+        if staging and (staging.event_hosts or staging.event_discovery_only) else None
     )
     server = create_mcp(store, port, staging, oauth, events)
     mcp_app = server.streamable_http_app()
@@ -253,7 +253,7 @@ def create_app(database: Path, port: int = 8000, *, staging: StagingConfig | Non
     @asynccontextmanager
     async def lifespan(app):
         async with server.session_manager.run(), TaskGroup() as tasks:
-            worker = tasks.create_task(events.run()) if events else None
+            worker = tasks.create_task(events.run()) if events and not events.discovery_only else None
             try:
                 yield
             finally:
