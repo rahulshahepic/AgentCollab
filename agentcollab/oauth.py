@@ -30,6 +30,7 @@ GRANT_SECONDS = 30 * 24 * 60 * 60
 CHATGPT_REDIRECT = re.compile(
     r"https://chatgpt\.com/(?:connector_platform_oauth_redirect|connector/oauth/[A-Za-z0-9_-]{1,128})"
 )
+MUSE_REDIRECT = "https://agent.meta.ai/api/hatch/oauth/callback"
 
 
 class AgentRefresh(RefreshToken):
@@ -69,8 +70,10 @@ class StagingOAuth:
 
     async def register_client(self, client):
         redirects = [str(uri) for uri in client.redirect_uris or []]
-        if not redirects or len(redirects) > 2 or any(not CHATGPT_REDIRECT.fullmatch(uri) for uri in redirects):
-            raise RegistrationError("invalid_redirect_uri", "Use a ChatGPT OAuth callback.")
+        if not redirects or len(redirects) > 2 or any(
+            uri != MUSE_REDIRECT and not CHATGPT_REDIRECT.fullmatch(uri) for uri in redirects
+        ):
+            raise RegistrationError("invalid_redirect_uri", "Use a supported ChatGPT or Muse OAuth callback.")
         method = client.token_endpoint_auth_method
         if method not in {"none", "client_secret_post", "client_secret_basic"}:
             raise RegistrationError("invalid_client_metadata", "Unsupported client authentication method.")
