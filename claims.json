@@ -1,4 +1,13 @@
 {
   "version": 1,
-  "claims": {}
+  "claims": {
+    "9": {
+      "owner": "eb2f6375-5944-832c-8ea4-638b5fd01507",
+      "batch": "milestone-8-issue-9",
+      "mode": "automated",
+      "branch": "codex/m8-issue-9-staging-fixture",
+      "pr": null,
+      "expires_at": "2026-11-27T02:16:34.639Z"
+    }
+  }
 }
