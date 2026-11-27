@@ -1,13 +1,4 @@
 {
   "version": 1,
-  "claims": {
-    "9": {
-      "owner": "manual-fixture-retry-1795752473049",
-      "batch": "milestone-8-issue-9",
-      "mode": "automated",
-      "branch": "codex/m8-issue-9-staging-fixture",
-      "pr": 13,
-      "expires_at": "2026-11-27T04:12:53.657Z"
-    }
-  }
+  "claims": {}
 }
