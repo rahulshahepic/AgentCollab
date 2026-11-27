@@ -26,9 +26,9 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from .accounts import OwnerAccounts, SESSION_COOKIE, SESSION_SECONDS, return_path
-from .oauth import SCOPE, StagingOAuth
+from .oauth import SCOPE, StagingOAuth, redirect_provider
 from .staging import RAILWAY_HEALTH_HOST, STAGING_WORKSPACE, StagingBoundary, StagingConfig
-from .store import Store, StoreError
+from .store import AGENT_PROVIDERS, Store, StoreError
 
 
 LOCAL_WORKSPACE = "local-preview"
@@ -174,8 +174,11 @@ def activity_page(store, workspace, *, can_sign_out=False):
 
 def agents_page(store, workspace, *, error=None):
     banner = f'<p class="error" role="alert">{escape(error)}</p>' if error else ""
-    add = """<form class="add" method="post" action="/agents">
+    provider_options = "".join(f'<option value="{key}">{label}</option>' for key, label in AGENT_PROVIDERS.items())
+    add = f"""<form class="add" method="post" action="/agents">
 <div><label for="name">Agent name</label><input id="name" name="name" required maxlength="60"></div>
+<div><label for="provider">Agent type</label><select name="provider" id="provider">
+<option value="">Choose a type</option>{provider_options}</select></div>
 <button type="submit">Add agent</button></form>"""
     rows = []
     for agent in store.list_agents(workspace):
@@ -190,7 +193,9 @@ def agents_page(store, workspace, *, error=None):
             token_form = f'''<form method="post" action="/agents/{agent_id}/credential">
 <button type="submit" class="secondary">{"Rotate credential" if agent["manual_credential"] else "Issue credential"}</button>
 </form>'''
-        rows.append(f"""<details class="agent"><summary><strong>{name}</strong><span class="status">{label}</span></summary>
+        provider = AGENT_PROVIDERS.get(agent["provider"], "")
+        status = " · ".join(filter(None, (provider, label)))
+        rows.append(f"""<details class="agent"><summary><strong>{name}</strong><span class="status">{status}</span></summary>
 <div class="agent-detail"><form method="post" action="/agents/{agent_id}/rename">
 <label for="name-{agent_id}">Agent name</label><input id="name-{agent_id}" name="name" value="{name}" required maxlength="60">
 <button type="submit" class="secondary">Save name</button></form>
@@ -198,12 +203,6 @@ def agents_page(store, workspace, *, error=None):
 <button type="submit" class="secondary">Disconnect</button></form></div></details>""")
     content = banner + add + '<section aria-label="Registered agents">' + "".join(rows) + '</section>'
     return page("Agents", content, status=400 if error else 200)
-
-
-async def form_name(request, origin):
-    if request.headers.get("origin") != origin:
-        raise HTTPException(403)
-    return (await form_fields(request)).get("name", [""])[0]
 
 
 async def form_fields(request, *, limit=1024):
@@ -239,8 +238,8 @@ def create_app(database: Path, port: int = 8000, *, staging: StagingConfig | Non
     async def agents(request: Request):
         if request.method == "GET":
             return await run_in_threadpool(agents_page, store, workspace)
-        name = await browser_form(request)
-        return await change(store.add_agent, name)
+        form = await browser_fields(request)
+        return await change(store.add_agent, form.get("name", [""])[0], form.get("provider", [""])[0])
 
     async def rename(request: Request):
         return await change(store.rename, request.path_params['agent_id'], await browser_form(request))
@@ -249,9 +248,14 @@ def create_app(database: Path, port: int = 8000, *, staging: StagingConfig | Non
         await browser_form(request)
         return await change(store.disconnect, request.path_params['agent_id'])
 
-    async def browser_form(request):
+    async def browser_fields(request):
         origin = staging.origin if staging else f"http://{request.headers.get('host')}"
-        return await form_name(request, origin)
+        if request.headers.get("origin") != origin:
+            raise HTTPException(403)
+        return await form_fields(request)
+
+    async def browser_form(request):
+        return (await browser_fields(request)).get("name", [""])[0]
 
     async def credential(request: Request):
         await browser_form(request)
@@ -314,42 +318,61 @@ def create_app(database: Path, port: int = 8000, *, staging: StagingConfig | Non
         response.delete_cookie(SESSION_COOKIE, secure=True, httponly=True, samesite="lax")
         return response
 
-    async def oauth_consent(request: Request):
-        if request.method == "POST":
-            if request.headers.get("origin") != staging.origin:
-                raise HTTPException(403)
-            form = await form_fields(request)
-            handle = form.get("request", [""])[0]
-            decision = form.get("decision", [""])[0]
-            if decision not in {"approve", "deny"}:
-                raise HTTPException(400)
-            try:
-                destination = await run_in_threadpool(
-                    oauth.consent, handle, form.get("agent", [""])[0], decision == "approve",
-                )
-            except StoreError as exc:
-                return page("Connect to ChatGPT", f"<p>{escape(str(exc))}</p>", status=400)
-            return RedirectResponse(destination, status_code=303, headers={
-                "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
-            })
-
-        handle = request.query_params.get("request", "")
-        if len(handle) != 43 or not await run_in_threadpool(oauth.pending, handle):
-            return page("Connect to ChatGPT", "<p>This request has expired. Reconnect from ChatGPT.</p>", status=400)
+    async def render_consent(handle, *, error=None, name=""):
+        pending = await run_in_threadpool(oauth.pending, handle) if len(handle) == 43 else None
+        provider = redirect_provider(str(pending.params.redirect_uri)) if pending else None
+        if provider is None:
+            return page("Connect an agent", "<p>This request has expired. Reconnect from your agent provider.</p>", status=400)
+        label = AGENT_PROVIDERS[provider]
         agents = await run_in_threadpool(store.list_agents, workspace)
-        options = "".join(f'<option value="{agent["id"]}">{escape(agent["name"])}</option>' for agent in agents)
-        if not options:
-            return page("Connect to ChatGPT", '<p><a href="/agents">Add an agent</a>, then reconnect from ChatGPT.</p>')
-        return page("Connect to ChatGPT", f"""
-<p>Choose which staging agent ChatGPT can send and read messages as.</p>
+        options = "".join(
+            f'<option value="{agent["id"]}">{escape(agent["name"])}</option>'
+            for agent in agents if agent["provider"] in ("", provider)
+        )
+        request_field = f'<input type="hidden" name="request" value="{escape(handle)}">'
+        banner = f'<p class="error" role="alert">{escape(error)}</p>' if error else ""
+        reconnect = f"""
 <form class="consent" method="post" action="/oauth/consent">
-<input type="hidden" name="request" value="{escape(handle)}">
-<label for="agent">Agent</label>
+{request_field}
+<label for="agent">Existing agent</label>
 <select name="agent" id="agent" required>
 <option value="">Choose an agent</option>{options}</select>
-<button type="submit" name="decision" value="approve">Allow access</button>
-<button type="submit" class="secondary" name="decision" value="deny" formnovalidate>Deny</button>
-</form>""")
+<button type="submit" name="decision" value="approve">Connect existing agent</button>
+</form>""" if options else ""
+        return page(f"Connect {label}", f"""
+<p>Authorize {label} to send and read messages as one AgentCollab agent.</p>
+{banner}<form class="consent" method="post" action="/oauth/consent">
+{request_field}
+<label for="new-agent">New agent name</label>
+<input name="name" id="new-agent" maxlength="60" value="{escape(name)}" required>
+<button type="submit" name="decision" value="approve">Create agent and allow access</button>
+</form>
+{reconnect}
+<form class="consent" method="post" action="/oauth/consent">
+{request_field}
+<button type="submit" class="secondary" name="decision" value="deny">Deny</button>
+</form>""", status=400 if error else 200)
+
+    async def oauth_consent(request: Request):
+        if request.method == "GET":
+            return await render_consent(request.query_params.get("request", ""))
+        if request.headers.get("origin") != staging.origin:
+            raise HTTPException(403)
+        form = await form_fields(request)
+        handle = form.get("request", [""])[0]
+        decision = form.get("decision", [""])[0]
+        name = form.get("name", [""])[0]
+        if decision not in {"approve", "deny"}:
+            raise HTTPException(400)
+        try:
+            destination = await run_in_threadpool(
+                oauth.consent, handle, form.get("agent", [""])[0], decision == "approve", name,
+            )
+        except StoreError as exc:
+            return await render_consent(handle, error=str(exc), name=name)
+        return RedirectResponse(destination, status_code=303, headers={
+            "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+        })
 
     async def change(action, *arguments):
         try:

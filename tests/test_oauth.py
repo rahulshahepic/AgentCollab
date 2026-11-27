@@ -102,6 +102,45 @@ class StagingOAuthTests(unittest.TestCase):
         self.assertEqual(token.status_code, 200)
         self.assertEqual(self.result(self.rpc(token.json()["access_token"]))["identity"]["name"], "Cosworth")
 
+    def test_consent_can_create_or_update_an_agent_for_the_connecting_provider(self):
+        self.redirect = "https://claude.ai/api/mcp/auth_callback"
+        client_id = self.register().json()["client_id"]
+        location = self.authorize(client_id).headers["location"]
+        page = self.client.get(location, auth=self.owner)
+        self.assertIn("Connect Claude", page.text)
+        self.assertIn("New agent name", page.text)
+        self.assertIn("Connect existing agent", page.text)
+        handle = parse_qs(urlsplit(location).query)["request"][0]
+        approved = self.client.post("/oauth/consent", auth=self.owner, headers={"Origin": self.origin}, data={
+            "request": handle, "decision": "approve", "name": "Research Claude",
+        })
+        self.assertEqual(approved.status_code, 303)
+        self.assertEqual(self.client.get(location, auth=self.owner).status_code, 400)
+        code = parse_qs(urlsplit(approved.headers["location"]).query)["code"][0]
+        authorized = self.exchange(client_id, code)
+        self.assertEqual(authorized.status_code, 200)
+        self.assertEqual(self.result(self.rpc(authorized.json()["access_token"]))["identity"]["name"], "Research Claude")
+
+        reconnect = self.authorize(self.register().json()["client_id"]).headers["location"]
+        self.assertEqual(self.consent(reconnect, agent=self.agent).status_code, 303)
+        agents = {row["name"]: row for row in self.store.list_agents(STAGING_WORKSPACE)}
+        self.assertEqual(agents["Cosworth"]["id"], self.agent)
+        self.assertEqual(agents["Cosworth"]["provider"], "claude")
+        self.assertEqual(agents["Research Claude"]["provider"], "claude")
+
+        self.redirect = "https://chatgpt.com/connector/oauth/synthetic"
+        chatgpt = self.authorize(self.register().json()["client_id"]).headers["location"]
+        self.assertNotIn("Research Claude", self.client.get(chatgpt, auth=self.owner).text)
+        self.assertEqual(self.consent(chatgpt, agent=self.agent).status_code, 400)
+
+    def test_registration_keeps_callbacks_on_one_provider(self):
+        result = self.client.post("/register", json={
+            "redirect_uris": [self.redirect, "https://claude.ai/api/mcp/auth_callback"],
+            "token_endpoint_auth_method": "none",
+        })
+        self.assertEqual(result.status_code, 400)
+        self.assertEqual(result.json()["error"], "invalid_redirect_uri")
+
     def test_owner_consent_produces_one_agent_and_rotating_tokens(self):
         anonymous = self.rpc()
         self.assertEqual(anonymous.status_code, 401)

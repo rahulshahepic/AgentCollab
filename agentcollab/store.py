@@ -8,6 +8,18 @@ from pathlib import Path
 from uuid import uuid4
 
 
+AGENT_PROVIDERS = {
+    "chatgpt": "ChatGPT",
+    "claude": "Claude",
+    "muse": "Muse",
+    "perplexity": "Perplexity",
+    "grok": "Grok",
+    "copilot": "Copilot",
+    "gemini": "Gemini",
+    "other": "Other",
+}
+
+
 class StoreError(ValueError):
     """A rejected action with a message safe to show to the caller."""
 
@@ -22,6 +34,7 @@ class Store:
                     workspace TEXT NOT NULL,
                     name TEXT NOT NULL,
                     name_key TEXT NOT NULL,
+                    provider TEXT NOT NULL DEFAULT '',
                     token_hash TEXT UNIQUE,
                     disconnected INTEGER NOT NULL DEFAULT 0
                 );
@@ -59,6 +72,9 @@ class Store:
                     grant_expires INTEGER NOT NULL
                 );
             """)
+            db.execute("BEGIN IMMEDIATE")
+            if not any(row["name"] == "provider" for row in db.execute("PRAGMA table_info(agents)")):
+                db.execute("ALTER TABLE agents ADD COLUMN provider TEXT NOT NULL DEFAULT ''")
 
     @contextmanager
     def session(self, *, write=False):
@@ -86,7 +102,7 @@ class Store:
     def list_agents(self, workspace):
         with self.session() as db:
             return [dict(row, linked=bool(row["manual_credential"] or row["oauth_linked"])) for row in db.execute(
-                """SELECT id, name, token_hash IS NOT NULL AS manual_credential,
+                """SELECT id, name, provider, token_hash IS NOT NULL AS manual_credential,
                    EXISTS (
                        SELECT 1 FROM oauth_grants WHERE agent_id = agents.id
                        AND grant_expires > CAST(strftime('%s', 'now') AS INTEGER)
@@ -94,23 +110,28 @@ class Store:
                 (workspace,),
             )]
 
-    def add_agent(self, workspace, name):
-        name = self.clean_name(name)
-        agent_id = str(uuid4())
+    def add_agent(self, workspace, name, provider=""):
         with self.session(write=True) as db:
-            count = db.execute(
-                "SELECT count(*) FROM agents WHERE workspace = ? AND disconnected = 0",
-                (workspace,),
-            ).fetchone()[0]
-            if count >= 10:
-                raise StoreError("This workspace already has 10 active agents.")
-            try:
-                db.execute(
-                    "INSERT INTO agents (id, workspace, name, name_key) VALUES (?, ?, ?, ?)",
-                    (agent_id, workspace, name, name.casefold()),
-                )
-            except sqlite3.IntegrityError as exc:
-                raise StoreError("An active agent already has that name.") from exc
+            return self.insert_agent(db, workspace, name, provider)
+
+    def insert_agent(self, db, workspace, name, provider):
+        name = self.clean_name(name)
+        if provider and provider not in AGENT_PROVIDERS:
+            raise StoreError("Choose a supported agent type.")
+        agent_id = str(uuid4())
+        count = db.execute(
+            "SELECT count(*) FROM agents WHERE workspace = ? AND disconnected = 0",
+            (workspace,),
+        ).fetchone()[0]
+        if count >= 10:
+            raise StoreError("This workspace already has 10 active agents.")
+        try:
+            db.execute(
+                "INSERT INTO agents (id, workspace, name, name_key, provider) VALUES (?, ?, ?, ?, ?)",
+                (agent_id, workspace, name, name.casefold(), provider),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise StoreError("An active agent already has that name.") from exc
         return agent_id
 
     @staticmethod

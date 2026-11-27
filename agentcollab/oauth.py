@@ -30,7 +30,16 @@ GRANT_SECONDS = 30 * 24 * 60 * 60
 CHATGPT_REDIRECT = re.compile(
     r"https://chatgpt\.com/(?:connector_platform_oauth_redirect|connector/oauth/[A-Za-z0-9_-]{1,128})"
 )
-MUSE_REDIRECT = "https://agent.meta.ai/api/hatch/oauth/callback"
+EXACT_REDIRECT_PROVIDERS = {
+    "https://agent.meta.ai/api/hatch/oauth/callback": "muse",
+    "https://claude.ai/api/mcp/auth_callback": "claude",
+}
+
+
+def redirect_provider(uri):
+    if CHATGPT_REDIRECT.fullmatch(uri):
+        return "chatgpt"
+    return EXACT_REDIRECT_PROVIDERS.get(uri)
 
 
 class AgentRefresh(RefreshToken):
@@ -70,10 +79,9 @@ class StagingOAuth:
 
     async def register_client(self, client):
         redirects = [str(uri) for uri in client.redirect_uris or []]
-        if not redirects or len(redirects) > 2 or any(
-            uri != MUSE_REDIRECT and not CHATGPT_REDIRECT.fullmatch(uri) for uri in redirects
-        ):
-            raise RegistrationError("invalid_redirect_uri", "Use a supported ChatGPT or Muse OAuth callback.")
+        providers = {redirect_provider(uri) for uri in redirects}
+        if not redirects or len(redirects) > 2 or None in providers or len(providers) != 1:
+            raise RegistrationError("invalid_redirect_uri", "Use a supported callback for one provider.")
         method = client.token_endpoint_auth_method
         if method not in {"none", "client_secret_post", "client_secret_basic"}:
             raise RegistrationError("invalid_client_metadata", "Unsupported client authentication method.")
@@ -112,18 +120,29 @@ class StagingOAuth:
             row = self.unexpired(db, "oauth_requests", self.store.hash_token(handle))
         return PendingConsent.model_validate_json(row["data"]) if row else None
 
-    def consent(self, handle, agent_id, approved):
+    def consent(self, handle, agent_id, approved, name=""):
         digest = self.store.hash_token(handle)
         with self.store.session(write=True) as db:
             row = self.unexpired(db, "oauth_requests", digest)
             if not row:
-                raise StoreError("This consent request has expired. Reconnect from ChatGPT.")
+                raise StoreError("This consent request has expired. Reconnect from your agent provider.")
             pending = PendingConsent.model_validate_json(row["data"])
             params = pending.params
             db.execute("DELETE FROM oauth_requests WHERE digest = ?", (digest,))
             if not approved:
                 return construct_redirect_uri(str(params.redirect_uri), state=params.state, error="access_denied")
-            self.store.active_agent(db, STAGING_WORKSPACE, agent_id)
+            provider = redirect_provider(str(params.redirect_uri))
+            if provider is None:
+                raise StoreError("This OAuth callback is unavailable.")
+            if agent_id and name.strip():
+                raise StoreError("Choose an existing agent or name a new one.")
+            if agent_id:
+                agent = self.store.active_agent(db, STAGING_WORKSPACE, agent_id)
+                if agent["provider"] not in ("", provider):
+                    raise StoreError("Choose an agent for this provider.")
+                db.execute("UPDATE agents SET provider = ? WHERE id = ?", (provider, agent_id))
+            else:
+                agent_id = self.store.insert_agent(db, STAGING_WORKSPACE, name, provider)
             code = token_urlsafe(32)
             now = time()
             record = AuthorizationCode(
