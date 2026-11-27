@@ -68,11 +68,12 @@ class PublicHTTPSConnection(HTTPSConnection):
 
 
 class InboxEvents:
-    def __init__(self, store, oauth, hosts, encryption_key, *, transport=None):
+    def __init__(self, store, oauth, hosts, encryption_key, *, transport=None, discovery_only=False):
         self.store = store
         self.oauth = oauth
         self.hosts = frozenset(hosts)
-        self.encryption = Fernet(encryption_key)
+        self.discovery_only = discovery_only
+        self.encryption = None if discovery_only else Fernet(encryption_key)
         self.transport = self.post if transport is None else transport
 
     def permits(self, token):
@@ -81,11 +82,20 @@ class InboxEvents:
         client = self.oauth.registered_client(token.client_id)
         return client is not None and {redirect_provider(str(uri)) for uri in client.redirect_uris} == {"chatgpt"}
 
-    def destination(self, url):
+    @staticmethod
+    def callback_url(url):
         if not url.isascii() or len(url) > 2048 or re.search(r"[\x00-\x20\x7f\\]", url):
             raise CallbackError("invalid_url")
         target = urlsplit(url)
-        if target.scheme != "https" or target.netloc not in self.hosts or "#" in url:
+        if (target.scheme != "https" or not target.hostname or target.netloc != target.hostname or "#" in url
+                or not re.fullmatch(r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]*",
+                                    target.hostname)):
+            raise CallbackError("invalid_url")
+        return target
+
+    def destination(self, url):
+        target = self.callback_url(url)
+        if target.hostname not in self.hosts:
             raise CallbackError("invalid_url")
         return target
 
@@ -291,6 +301,14 @@ class InboxEvents:
             key = b""
         if not 24 <= len(key) <= 64:
             return fail(-32602, "Invalid signing secret.")
+        if self.discovery_only:
+            try:
+                hostname = self.callback_url(url).hostname
+            except (CallbackError, ValueError):
+                return fail(-32015, "Invalid callback URL.", reason="invalid_url")
+            LOGGER.warning("ChatGPT event callback discovery: %s", hostname)
+            return fail(-32015, "Callback recorded for staging review. No subscription was created.",
+                        reason="staging_callback_discovery")
         try:
             result = await run_in_threadpool(self.subscribe, token, url, key)
         except (CallbackError, ValueError) as exc:
