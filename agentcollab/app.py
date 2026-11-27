@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from html import escape
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlencode
 from uuid import NAMESPACE_URL, uuid5
 
 from mcp.server.auth.middleware.auth_context import get_access_token
@@ -25,6 +25,7 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+from .accounts import OwnerAccounts, SESSION_COOKIE, SESSION_SECONDS, return_path
 from .oauth import SCOPE, StagingOAuth
 from .staging import RAILWAY_HEALTH_HOST, STAGING_WORKSPACE, StagingBoundary, StagingConfig
 from .store import Store, StoreError
@@ -147,11 +148,12 @@ def page(section, body, *, status=200):
     })
 
 
-def activity_page(store, workspace):
+def activity_page(store, workspace, *, can_sign_out=False):
     transactions = store.activity(workspace)
+    sign_out = '<form class="sign-out" method="post" action="/logout"><button class="secondary">Sign out</button></form>' if can_sign_out else ""
     if not transactions:
         return page("Activity", '<div class="empty"><p>Messages between your agents will appear here.</p>'
-                    '<a class="button" href="/agents#name">Add an agent</a></div>')
+                    '<a class="button" href="/agents#name">Add an agent</a></div>' + sign_out)
     rows = []
     for row in transactions:
         timestamp = row['replied_at'] or row['created']
@@ -202,11 +204,11 @@ async def form_name(request, origin):
     return (await form_fields(request)).get("name", [""])[0]
 
 
-async def form_fields(request):
+async def form_fields(request, *, limit=1024):
     content = bytearray()
     async for chunk in request.stream():
         content.extend(chunk)
-        if len(content) > 1024:
+        if len(content) > limit:
             raise HTTPException(413)
     try:
         return parse_qs(content.decode(), max_num_fields=4)
@@ -217,6 +219,9 @@ async def form_fields(request):
 def create_app(database: Path, port: int = 8000, *, staging: StagingConfig | None = None):
     workspace = STAGING_WORKSPACE if staging else LOCAL_WORKSPACE
     store = Store(database)
+    accounts = None
+    if staging and (staging.local_accounts or staging.owner_setup_code):
+        accounts = OwnerAccounts(store, staging.owner_setup_code, staging.owner_setup_expires)
     oauth = StagingOAuth(store, f"{staging.origin}/mcp") if staging else None
     server = create_mcp(store, port, staging, oauth)
     mcp_app = server.streamable_http_app()
@@ -227,7 +232,7 @@ def create_app(database: Path, port: int = 8000, *, staging: StagingConfig | Non
             yield
 
     def activity(request: Request):
-        return activity_page(store, workspace)
+        return activity_page(store, workspace, can_sign_out=accounts is not None)
 
     async def agents(request: Request):
         if request.method == "GET":
@@ -257,6 +262,55 @@ def create_app(database: Path, port: int = 8000, *, staging: StagingConfig | Non
             return JSONResponse({"token": token}, headers=headers)
         return page("Agents", "<p>Copy this credential now. Issuing a new one invalidates it.</p>"
                     f'<p><code>{escape(token)}</code></p><p><a href="/agents">Back to agents</a></p>')
+
+    async def account_page(request: Request):
+        setup = request.url.path == "/setup"
+        if setup == await run_in_threadpool(accounts.exists):
+            return RedirectResponse(
+                ("/login" if setup else "/setup") + "?" + urlencode({"next": return_path(request.query_params.get("next", "/"))}),
+                status_code=303, headers={"Cache-Control": "no-store"},
+            )
+        target = return_path(request.query_params.get("next", "/"))
+        error = ""
+        if request.method == "POST":
+            if request.headers.get("origin") != staging.origin:
+                raise HTTPException(403)
+            form = await form_fields(request, limit=8192)
+            target = return_path(form.get("next", ["/"])[0])
+            username = form.get("username", [""])[0].strip()
+            password = form.get("password", [""])[0]
+            if setup:
+                token = await run_in_threadpool(accounts.setup, form.get("code", [""])[0].strip(), username, password)
+            else:
+                token = await run_in_threadpool(accounts.authenticate, username, password)
+            if token is not None:
+                response = RedirectResponse(target, status_code=303, headers={"Cache-Control": "no-store"})
+                response.set_cookie(SESSION_COOKIE, token, max_age=SESSION_SECONDS, secure=True,
+                                    httponly=True, samesite="lax")
+                return response
+            error = '<p class="error" role="alert">Check the details and try again.</p>'
+        heading = "Set up your account" if setup else "Sign in"
+        code = '<label for="code">One-time setup code</label><input id="code" name="code" maxlength="43" required>' if setup else ""
+        password_hint = ' minlength="12" aria-describedby="password-hint"' if setup else ""
+        hint = '<p id="password-hint">Use at least 12 characters.</p>' if setup else ""
+        return page(heading, f"""
+{error}<form class="owner-login" method="post" action="{request.url.path}">
+<input type="hidden" name="next" value="{escape(target)}">
+{code}
+<label for="username">Username</label>
+<input id="username" name="username" maxlength="40" autocomplete="username" autocapitalize="none" required>
+<label for="password">Password</label>
+<input id="password" name="password" type="password" maxlength="128" autocomplete="{'new-password' if setup else 'current-password'}"{password_hint} required>
+{hint}<button type="submit">{heading}</button>
+</form>""", status=401 if error else 200)
+
+    async def account_logout(request: Request):
+        if request.headers.get("origin") != staging.origin:
+            raise HTTPException(403)
+        await run_in_threadpool(accounts.logout, request.cookies.get(SESSION_COOKIE, ""))
+        response = RedirectResponse("/login", status_code=303, headers={"Cache-Control": "no-store"})
+        response.delete_cookie(SESSION_COOKIE, secure=True, httponly=True, samesite="lax")
+        return response
 
     async def oauth_consent(request: Request):
         if request.method == "POST":
@@ -309,10 +363,16 @@ def create_app(database: Path, port: int = 8000, *, staging: StagingConfig | Non
     middleware = [Middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)]
     hosted_routes = []
     if staging:
-        middleware.append(Middleware(StagingBoundary, config=staging))
+        middleware.append(Middleware(StagingBoundary, config=staging, accounts=accounts))
         hosted_routes.extend([
             Route("/agents/{agent_id}/credential", credential, methods=["POST"]),
             Route("/oauth/consent", oauth_consent, methods=["GET", "POST"]),
+        ])
+    if accounts:
+        hosted_routes.extend([
+            Route("/login", account_page, methods=["GET", "POST"]),
+            Route("/setup", account_page, methods=["GET", "POST"]),
+            Route("/logout", account_logout, methods=["POST"]),
         ])
     return Starlette(
         routes=[Route("/", activity), Route("/agents", agents, methods=["GET", "POST"]),

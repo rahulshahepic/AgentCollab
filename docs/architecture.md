@@ -39,8 +39,7 @@ Issue #4 hosts the existing SQLite prototype on a private Railway workspace
 for synthetic data, with separate owner and agent credentials. The pilot uses
 one replica and a persistent volume. It proves the hosted web and MCP
 endpoints. The staging OAuth flow uses the MCP SDK's authorization server and
-an owner consent screen for one named agent. The private staging owner login
-remains in place until the Google account flow is available. Record each
+an owner consent screen for one named agent. The private staging pilot uses a local username and password with one-time owner enrollment. The identity provider can be added later. Record each
 host's actual connection and messaging outcome separately.
 
 ### Accounts and credentials

@@ -7,10 +7,14 @@ from dataclasses import dataclass, field
 from hashlib import sha256
 from hmac import compare_digest
 from pathlib import Path
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlencode
 
+from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import Headers
-from starlette.responses import JSONResponse, PlainTextResponse
+from starlette.requests import Request
+from starlette.responses import JSONResponse, PlainTextResponse, RedirectResponse
+
+from .accounts import SESSION_COOKIE, TOKEN, return_path
 
 STAGING_WORKSPACE = "railway-staging"
 RAILWAY_HEALTH_HOST = "healthcheck.railway.app"
@@ -26,6 +30,9 @@ class StagingConfig:
     port: int
     database: Path
     owner_password_hash: str = field(repr=False)
+    owner_setup_code: str = field(default="", repr=False)
+    owner_setup_expires: int = 0
+    local_accounts: bool = False
 
     @property
     def host(self):
@@ -48,9 +55,14 @@ class StagingConfig:
         if env.get("RAILWAY_ENVIRONMENT_NAME") != "staging":
             raise ValueError("This entry point requires the Railway staging environment.")
         password_hash = env.get("AGENTCOLLAB_OWNER_PASSWORD_SHA256", "")
-        if not re.fullmatch(r"[a-f0-9]{64}", password_hash):
+        code = env.get("AGENTCOLLAB_OWNER_SETUP_CODE", "")
+        expires = env.get("AGENTCOLLAB_OWNER_SETUP_EXPIRES_AT", "")
+        if (code or expires) and (not TOKEN.fullmatch(code) or not re.fullmatch(r"[0-9]{1,12}", expires)):
+            raise ValueError("Configure both the generated owner setup code and its Unix expiration.")
+        local_accounts = env.get("AGENTCOLLAB_LOCAL_ACCOUNTS") == "1"
+        if not local_accounts and not code and not re.fullmatch(r"[a-f0-9]{64}", password_hash):
             raise ValueError("Configure the SHA-256 hash of a randomly generated owner password.")
-        return cls(f"https://{domain}", port, volume / "agentcollab-staging.sqlite3", password_hash)
+        return cls(f"https://{domain}", port, volume / "agentcollab-staging.sqlite3", password_hash, code, int(expires or 0), local_accounts)
 
     def allows(self, authorization):
         scheme, _, encoded = authorization.partition(" ")
@@ -67,9 +79,10 @@ class StagingConfig:
 class StagingBoundary:
     """Require owner auth on web routes and leave MCP auth to the MCP SDK."""
 
-    def __init__(self, app, config):
+    def __init__(self, app, config, accounts):
         self.app = app
         self.config = config
+        self.accounts = accounts
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -82,9 +95,20 @@ class StagingBoundary:
         elif path == "/token" and scope["method"] == "POST":
             await self.exchange(scope, headers, receive, send)
             return
-        elif path in PUBLIC_PATHS:
+        elif path in PUBLIC_PATHS or (self.accounts and path in {"/login", "/setup", "/static/app.css"}):
             await self.app(scope, receive, send)
             return
+        elif self.accounts:
+            request = Request(scope)
+            if await run_in_threadpool(self.accounts.valid, request.cookies.get(SESSION_COOKIE, "")):
+                await self.app(scope, receive, send)
+                return
+            if scope["method"] in {"GET", "HEAD"}:
+                destination = return_path(request.url.path + ("?" + request.url.query if request.url.query else ""))
+                response = RedirectResponse("/login?" + urlencode({"next": destination}), status_code=303,
+                                            headers={"Cache-Control": "no-store"})
+            else:
+                response = PlainTextResponse("Sign in first", status_code=401, headers={"Cache-Control": "no-store"})
         elif self.config.allows(headers.get("authorization", "")):
             await self.app(scope, receive, send)
             return

@@ -50,14 +50,19 @@ Issue #4 uses an owner-only staging pilot with synthetic data. The service runs
 `python -m agentcollab serve-staging` from the reviewed `staging` branch.
 Generate a Railway HTTPS domain and attach a small private volume at `/data`.
 Railway provides the domain, volume mount path, environment name, and listener
-port. Configure `AGENTCOLLAB_OWNER_PASSWORD_SHA256` as the lowercase SHA-256
-hex digest of a randomly generated password with at least 32 characters. Keep
-the password in your password manager and out of GitHub. Enable Railway's
-**Wait for CI** setting on the staging source. Railway checks `/health` before
-routing traffic to the new deployment.
+port. Enable local staging accounts with
+`AGENTCOLLAB_LOCAL_ACCOUNTS=1`. Set `AGENTCOLLAB_OWNER_SETUP_CODE`
+to a generated 32-byte URL-safe token and `AGENTCOLLAB_OWNER_SETUP_EXPIRES_AT`
+to its Unix expiration. The owner retrieves the code from Railway staging
+variables and enters it at `/setup` to choose their username and password.
+The setup code can create only the first account and can be removed after
+enrollment. Keep the local accounts setting enabled. On later visits, use
+the username and password at `/login`.
 
-At the staging HTTPS origin, sign in as `owner` with that password. In
-**Agents**, register each synthetic agent and select **Issue credential**.
+Enable Railway's **Wait for CI** setting on the staging source. Railway
+checks `/health` before routing traffic to the new deployment.
+
+In **Agents**, register each synthetic agent and select **Issue credential**.
 Copy the credential to a client that can set the `Authorization: Bearer`
 header for the HTTPS `/mcp` endpoint. Rotating or disconnecting that agent
 invalidates its previous credential. Keep the browser password and agent
@@ -71,7 +76,6 @@ and select **Allow access**. The connector receives a 15-minute access token
 and can renew it for up to 30 days without asking again. Disconnecting the
 agent revokes its grants. No agent secret has to be copied into ChatGPT.
 
-The owner login is shared by the private staging instance. Google account
-sign-in is a separate feature. Record whether the intended ChatGPT account
+The staging pilot supports one username-and-password owner account. An identity provider is a separate feature. Record whether the intended ChatGPT account
 can create the private plugin and whether Cosworth on iPhone can use it to
 send and read a synthetic message.
