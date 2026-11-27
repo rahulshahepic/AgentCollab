@@ -36,7 +36,9 @@ class OwnerAccountTests(unittest.TestCase):
 
     def test_setup_login_logout_and_restart(self):
         self.assertEqual(self.client.get("/").headers["location"], "/login?next=%2F")
-        self.assertEqual(self.client.get("/setup").status_code, 200)
+        setup_page = self.client.get("/setup")
+        self.assertEqual(setup_page.status_code, 200)
+        self.assertEqual(setup_page.headers["referrer-policy"], "same-origin")
         self.assertEqual(self.setup_account(code="B" * 43).status_code, 401)
         self.assertEqual(self.client.post("/setup", data={"code": self.code}).status_code, 403)
         setup = self.setup_account(next="//elsewhere.example/")
