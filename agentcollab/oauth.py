@@ -209,6 +209,7 @@ class StagingOAuth:
         return await run_in_threadpool(exchange)
 
     def issue(self, db, client_id, agent_id, now, grant_expires):
+        db.execute("DELETE FROM event_subscriptions WHERE client_id = ? AND agent_id != ?", (client_id, agent_id))
         access = token_urlsafe(32)
         refresh = token_urlsafe(32)
         lifetime = min(ACCESS_SECONDS, grant_expires - now)

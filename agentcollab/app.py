@@ -1,5 +1,6 @@
 """Web interface and MCP transport for local preview and private staging."""
 
+from asyncio import TaskGroup
 from contextlib import asynccontextmanager
 from html import escape
 from pathlib import Path
@@ -26,6 +27,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from .accounts import OwnerAccounts, SESSION_COOKIE, SESSION_SECONDS, return_path
+from .events import InboxEvents
 from .oauth import SCOPE, StagingOAuth, redirect_provider
 from .staging import RAILWAY_HEALTH_HOST, STAGING_WORKSPACE, StagingBoundary, StagingConfig
 from .store import AGENT_PROVIDERS, Store, StoreError
@@ -51,7 +53,7 @@ class WorkspaceTokens(TokenVerifier):
                            subject=workspace, resource=self.resource)
 
 
-def create_mcp(store, port, staging, oauth):
+def create_mcp(store, port, staging, oauth, events=None):
     origin = staging.origin if staging else f"http://127.0.0.1:{port}"
     resource = f"{origin}/mcp"
     server = FastMCP(
@@ -84,8 +86,8 @@ def create_mcp(store, port, staging, oauth):
         workspace, agent_id = caller()
         agents = store.list_agents(workspace)
         return {
-            "identity": next((public_agent(agent) for agent in agents if agent['id'] == agent_id), None),
-            "agents": [public_agent(agent) for agent in agents if agent['id'] != agent_id and agent['linked']],
+            "identity": next((public_agent(agent, events) for agent in agents if agent['id'] == agent_id), None),
+            "agents": [public_agent(agent, events) for agent in agents if agent['id'] != agent_id and agent['linked']],
         }
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
@@ -128,8 +130,9 @@ def invoke(action, *args, **kwargs):
         raise ToolError(str(exc)) from exc
 
 
-def public_agent(agent):
-    return {"id": agent['id'], "name": agent['name'], "push": False}
+def public_agent(agent, events):
+    return {"id": agent["id"], "name": agent["name"],
+            "push": events is not None and events.has_subscription(agent["id"])}
 
 
 def page(section, body, *, status=200):
@@ -172,7 +175,7 @@ def activity_page(store, workspace, *, can_sign_out=False):
     return page("Activity", '<section aria-label="Recent messages">' + "".join(rows) + '</section>' + sign_out)
 
 
-def agents_page(store, workspace, *, error=None):
+def agents_page(store, workspace, *, error=None, events=None):
     banner = f'<p class="error" role="alert">{escape(error)}</p>' if error else ""
     provider_options = "".join(f'<option value="{key}">{label}</option>' for key, label in AGENT_PROVIDERS.items())
     add = f"""<form class="add" method="post" action="/agents">
@@ -202,6 +205,18 @@ def agents_page(store, workspace, *, error=None):
 {token_form}<form method="post" action="/agents/{agent_id}/disconnect">
 <button type="submit" class="secondary">Disconnect</button></form></div></details>""")
     content = banner + add + '<section aria-label="Registered agents">' + "".join(rows) + '</section>'
+    if events:
+        failures = events.failures(workspace)
+        if failures:
+            items = []
+            for row in failures:
+                items.append(f"""<li><p><strong>{escape(row['name'])}</strong> ·
+{escape(row['created'])} · {escape(row['last_error'].replace('_', ' '))}</p>
+<form method="post" action="/agents/retry-delivery">
+<input type="hidden" name="subscription" value="{escape(row['subscription_id'])}">
+<input type="hidden" name="message" value="{escape(row['message_id'])}">
+<button type="submit" class="secondary">Retry delivery</button></form></li>""")
+            content += '<section><h2>Failed push deliveries</h2><ul>' + "".join(items) + '</ul></section>'
     return page("Agents", content, status=400 if error else 200)
 
 
@@ -224,22 +239,39 @@ def create_app(database: Path, port: int = 8000, *, staging: StagingConfig | Non
     if staging and (staging.local_accounts or staging.owner_setup_code):
         accounts = OwnerAccounts(store, staging.owner_setup_code, staging.owner_setup_expires)
     oauth = StagingOAuth(store, f"{staging.origin}/mcp") if staging else None
-    server = create_mcp(store, port, staging, oauth)
+    events = (
+        InboxEvents(store, oauth, staging.event_hosts, staging.event_key)
+        if staging and staging.event_hosts else None
+    )
+    server = create_mcp(store, port, staging, oauth, events)
     mcp_app = server.streamable_http_app()
+    if events:
+        for route in mcp_app.routes:
+            if route.path == "/mcp":
+                route.app = events.wrap(route.app)
 
     @asynccontextmanager
     async def lifespan(app):
-        async with server.session_manager.run():
-            yield
+        async with server.session_manager.run(), TaskGroup() as tasks:
+            worker = tasks.create_task(events.run()) if events else None
+            try:
+                yield
+            finally:
+                if worker:
+                    worker.cancel()
 
     def activity(request: Request):
         return activity_page(store, workspace, can_sign_out=accounts is not None)
 
     async def agents(request: Request):
         if request.method == "GET":
-            return await run_in_threadpool(agents_page, store, workspace)
+            return await run_in_threadpool(agents_page, store, workspace, events=events)
         form = await browser_fields(request)
         return await change(store.add_agent, form.get("name", [""])[0], form.get("provider", [""])[0])
+
+    async def retry_delivery(request: Request):
+        form = await browser_fields(request)
+        return await change(events.retry, form.get("subscription", [""])[0], form.get("message", [""])[0])
 
     async def rename(request: Request):
         return await change(store.rename, request.path_params['agent_id'], await browser_form(request))
@@ -262,7 +294,7 @@ def create_app(database: Path, port: int = 8000, *, staging: StagingConfig | Non
         try:
             token = await run_in_threadpool(store.issue_token_for_agent, workspace, request.path_params["agent_id"])
         except StoreError as exc:
-            return await run_in_threadpool(agents_page, store, workspace, error=str(exc))
+            return await run_in_threadpool(agents_page, store, workspace, error=str(exc), events=events)
         headers = {"Cache-Control": "no-store"}
         if request.headers.get("accept") == "application/json":
             return JSONResponse({"token": token}, headers=headers)
@@ -378,7 +410,7 @@ def create_app(database: Path, port: int = 8000, *, staging: StagingConfig | Non
         try:
             await run_in_threadpool(action, workspace, *arguments)
         except StoreError as exc:
-            return await run_in_threadpool(agents_page, store, workspace, error=str(exc))
+            return await run_in_threadpool(agents_page, store, workspace, error=str(exc), events=events)
         return RedirectResponse("/agents", status_code=303)
 
     def health(request: Request):
@@ -393,6 +425,8 @@ def create_app(database: Path, port: int = 8000, *, staging: StagingConfig | Non
             Route("/agents/{agent_id}/credential", credential, methods=["POST"]),
             Route("/oauth/consent", oauth_consent, methods=["GET", "POST"]),
         ])
+    if events:
+        hosted_routes.append(Route("/agents/retry-delivery", retry_delivery, methods=["POST"]))
     if accounts:
         hosted_routes.extend([
             Route("/login", account_page, methods=["GET", "POST"]),
