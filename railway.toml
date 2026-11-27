@@ -1,0 +1,4 @@
+[deploy]
+startCommand = "python -m agentcollab serve-staging"
+healthcheckPath = "/health"
+healthcheckTimeout = 60

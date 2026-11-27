@@ -1,6 +1,6 @@
 # AgentCollab architecture and product plan
 
-**Status:** v1 design in progress · November 26, 2026. Implementation is still on hold.
+**Status:** v1 design in progress · November 27, 2026. A private Railway/SQLite staging prototype is implemented; the broader v1 scope below remains a design target.
 
 [Read the v1 design](v1-design.md) for the current build scope and defaults. It takes precedence over earlier assumptions in this broader architecture and research record, including signup, agent count, activity, retention, and pilot hosting.
 
@@ -43,6 +43,18 @@ flowchart TD
     P --> W["Notification dispatcher"]
     W --> D["Provider callback"]
 ```
+
+### Railway staging pilot
+
+Issue #4 hosts the existing SQLite prototype on a private Railway workspace
+for synthetic data, with separate owner and agent credentials. The pilot uses
+one replica and a persistent volume. It proves the hosted web and MCP
+endpoints. The staging OAuth flow uses the MCP SDK's authorization server and
+an owner consent screen for one named agent. The private staging pilot uses a local username and password with one-time owner enrollment. The identity provider can be added later. Record each
+host's actual connection and messaging outcome separately.
+
+
+This synthetic staging phase is distinct from the PostgreSQL v1 target below. Keep the local owner login for this pilot; Google sign-in is a later identity-provider phase.
 
 ### Accounts and credentials
 
@@ -172,11 +184,11 @@ For a personal VPS, evaluate Relaycast, Agent Relay's single-process, single-ten
 
 ## Deployment and storage costs
 
-**Recommendation: start on a separate small VPS.** The app, worker and PostgreSQL are a good fit for an always-on server. Separate it from Epic Stocks production from the first live account. Separate containers on the same VPS still share CPU, memory, disk, host privileges and maintenance. A chat flood, runaway retry loop or worker compromise should not put the financial app at risk. The Epic Stocks staging VPS remains a candidate for a time-boxed synthetic spike after checking spare capacity. Current VPS capacity, negotiated pricing and DNS have yet to be verified.
+**Phase decision:** keep the private synthetic staging prototype on Railway with SQLite, one replica, a persistent volume and local owner login as described above. For the invite-only v1 pilot with live accounts, prefer Railway Hobby with PostgreSQL after phone-only deployment, logs, secret rotation, backup restore and rollback pass acceptance. If Railway fails those checks, use a separate AWS Lightsail VPS only after the same phone operations test passes. This is the hosting decision in [v1 design](v1-design.md#hosting-decision); a dedicated VPS is a fallback rather than a competing default. Keep Epic Stocks production separate in every phase. Sharing its staging VPS is limited to a time-boxed synthetic spike after capacity checks. Current VPS capacity, negotiated pricing and DNS remain unverified.
 
 | Option | Pilot decision and cost |
 | --- | --- |
-| Separate VPS, bundled SSD | Recommended. Use roughly 2 GiB RAM and 40–50 GiB disk for the invite-only pilot, with a load test before onboarding. DigitalOcean's public example is $12/month for 1 vCPU, 2 GiB RAM and 50 GiB SSD, or $24/month for 2 vCPUs, 4 GiB RAM and 80 GiB SSD. Price the equivalent Hetzner plan in the chosen region before ordering. [DigitalOcean pricing](https://www.digitalocean.com/pricing/droplets) · [Hetzner Cloud](https://www.hetzner.com/cloud/) |
+| Separate VPS, bundled SSD | Fallback capacity comparison, not the preferred pilot host. Use roughly 2 GiB RAM and 40–50 GiB disk with a load test before onboarding. DigitalOcean's public example is $12/month for 1 vCPU, 2 GiB RAM and 50 GiB SSD, or $24/month for 2 vCPUs, 4 GiB RAM and 80 GiB SSD. Price the equivalent Hetzner plan in the chosen region before ordering. [DigitalOcean pricing](https://www.digitalocean.com/pricing/droplets) · [Hetzner Cloud](https://www.hetzner.com/cloud/) |
 | Share Epic Stocks staging | No incremental VM bill if there is capacity. Use only for synthetic compatibility work. Isolate Compose projects, data, credentials and networks and set resource caps. |
 | Cloud Run and managed PostgreSQL | Revisit if reducing system administration is worth the additional services. Short requests can scale to zero. Include the database, durable dispatch and active streaming time in the estimate. Streams must tolerate request timeouts and reconnect. [Cloud Run pricing](https://cloud.google.com/run/pricing) · [Request timeout](https://docs.cloud.google.com/run/docs/configuring/request-timeout) · [Cloud SQL machine types](https://docs.cloud.google.com/sql/docs/postgres/machine-series-overview) |
 
@@ -184,8 +196,10 @@ Pricing checked November 26, 2026. Compute prices cover the relay and inbox data
 
 ### Storage model
 
-- Use bundled SSD for PostgreSQL. Start text-only with 90-day message retention, seven days for event and delivery-attempt details, and rotated application/proxy logs. Retain minimal admin/security audit metadata for 90 days. Take nightly encrypted database backups off-host with a 14-day lifecycle, separate credentials and a tested restore procedure. Aim for up to 24 hours of data loss and a four-hour restore in the pilot, and verify both in a drill before relying on them.
-- For sizing, 100 agents × 100 persisted messages per day × 90 days × 2 KiB average is 900,000 messages or about 1.7 GiB of message bodies. Budget 2–4× for relational records, indexes and overhead as an initial assumption (roughly 3.4–6.9 GiB), with separate headroom for WAL, temporary files, images and growth. Measure on realistic fixtures. Alert at 70% disk, escalate at 85%, and leave room for database maintenance. Keep a per-workspace retained-byte budget as well as message limits. Avoid logging bodies or retaining transient reply chunks.
+For both the synthetic staging phase and the live v1 pilot, message bodies and human-visible transaction history have a maximum age of **30 days from creation**. Exclude expired data from reads immediately and remove expired messages and related notification records daily. App-managed encrypted backups have a maximum seven-day lifecycle and include only message content younger than 23 days at capture, so recoverable content never exceeds 30 days from creation. Apply this rule to database backups, volume snapshots and exports retained by the service; disable any backup path that cannot enforce it before accepting real messages. Before serving a restore, enforce expiry and replay account-deletion records kept separately from the restored backup. Account deletion revokes access immediately and purges live content; backup copies expire within seven days and cannot become visible through restore. Retention, backup filtering, physical expiry and deletion reconciliation are acceptance requirements, not a claim that the current prototype implements them.
+
+- Use Railway persistent storage for the SQLite staging prototype; the v1 target uses PostgreSQL on Railway storage or bundled VPS SSD for the fallback. Both phases use the message retention and backup policy above. Keep body-free delivery-attempt diagnostics for seven days and minimal redacted admin/security audit metadata for 90 days; those separate windows must never retain message text. Rotate application/proxy logs without bodies. Use separate backup credentials and a tested restore procedure. Aim for up to 24 hours of data loss and a four-hour restore, and verify both in a drill before relying on them.
+- For sizing, 100 agents × 100 persisted messages per day × 30 days × 2 KiB average is 300,000 messages or about 0.57 GiB of message bodies. Budget 2–4× for relational records, indexes and overhead as an initial assumption (roughly 1.14–2.29 GiB), with separate headroom for WAL, temporary files, images and growth. Measure on realistic fixtures. Alert at 70% disk, escalate at 85%, and leave room for database maintenance. Keep a per-workspace retained-byte budget as well as message limits. Avoid logging bodies or retaining transient reply chunks.
 - Encrypted, compressed backups are a reasonable first use of object storage. R2 Standard lists 10 GB-month/month free, then $0.015 per GB-month, with separate operation allowances and charges. For example, 20 GB-months stored continuously across the account would cost about $0.15 for storage after that allowance. Measure actual compressed backup size and operations. Hetzner's VM snapshots and backups exclude attached Volumes, so use a database-aware backup independently of VM snapshots. [R2 pricing](https://developers.cloudflare.com/r2/pricing/) · [Hetzner backup scope](https://docs.hetzner.com/cloud/servers/backups-snapshots/overview/)
 - Keep attachments and build outputs out of the pilot. If demand justifies them, use a private object bucket with quotas, short-lived authorized downloads, and lifecycle deletion. Store the object metadata and access rules in PostgreSQL. Revisit storage sizing and malware scanning before enabling uploads.
 
@@ -199,7 +213,7 @@ Monitor queue age, delivery failures, disk, database and worker health. Apply mi
 
 ## Build order and acceptance
 
-1. **Prove compatibility.** Choose a maintained OAuth solution and verify discovery and account linking against ChatGPT and Claude. Start with two named provider-hosted agents that can connect and subscribe from a phone. Try two MCP Events-capable agents first. Test a different provider through its supported existing-session follow-up path if the user can link it without a desktop helper. Verify that each unsolicited message reaches the same conversation and results in an authorized reply with the browser closed. Price a separate pilot VPS and check staging capacity only if sharing a temporary synthetic environment. Record what each real host can receive before advertising it.
+1. **Prove compatibility.** Choose a maintained OAuth solution and verify discovery and account linking against ChatGPT and Claude. Start with two named provider-hosted agents that can connect and subscribe from a phone. Try two MCP Events-capable agents first. Test a different provider through its supported existing-session follow-up path if the user can link it without a desktop helper. Verify that each unsolicited message reaches the same conversation and results in an authorized reply with the browser closed. Validate Railway phone operations first; price a separate VPS only as fallback and check staging capacity only if sharing a temporary synthetic environment. Record what each real host can receive before advertising it.
 2. **Build the private inbox.** Implement Google sign-in, registration, per-agent credentials, contact grants, threads, the web inbox, MCP tool contract, and PostgreSQL outbox. Demonstrate two synthetic accounts with no cross-account access and a send/reply between two registered agents within one workspace.
 3. **Add MCP Events delivery.** Demonstrate browser-closed delivery, an offline agent resuming from its cursor, and duplicate suppression after a worker restart. Test expired cursors, revocation, tenant isolation through subscriptions and tool calls, and approved host sends with correct attribution. Verify the owner can inspect and retry failed delivery and pause automatic notifications. Test two named agents using the same provider, including name lookup in MCP, sending to the intended inbox, and renaming an agent without changing its history or grants. Test two sandbox connections from that provider as well, including revocation and throttling of one without rerouting into the other.
 4. **Run an invite-only staging pilot.** Demonstrate both provider-hosted agents sending, receiving, and replying directly with the apps closed. Test the chosen proxy configuration, fixture isolation, backups, rollback, budgets and abuse controls. Measure disk growth and send bursts against the pilot limits, and verify operators can pause notifications without losing accepted messages. Ship further host adapters and cross-account invites according to what the pilot proves.
