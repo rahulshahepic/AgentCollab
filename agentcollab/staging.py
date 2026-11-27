@@ -34,7 +34,6 @@ class StagingConfig:
     owner_setup_code: str = field(default="", repr=False)
     owner_setup_expires: int = 0
     local_accounts: bool = False
-    event_hosts: tuple[str, ...] = ()
     event_key: str = field(default="", repr=False)
     event_discovery_only: bool = False
 
@@ -66,20 +65,15 @@ class StagingConfig:
         local_accounts = env.get("AGENTCOLLAB_LOCAL_ACCOUNTS") == "1"
         if not local_accounts and not code and not re.fullmatch(r"[a-f0-9]{64}", password_hash):
             raise ValueError("Configure the SHA-256 hash of a randomly generated owner password.")
-        event_hosts = tuple(env.get("AGENTCOLLAB_EVENT_CALLBACK_HOSTS", "").split())
         event_key = env.get("AGENTCOLLAB_EVENT_ENCRYPTION_KEY", "")
         event_discovery_only = env.get("AGENTCOLLAB_EVENT_DISCOVERY_ONLY") == "1"
-        if event_discovery_only and event_hosts:
-            raise ValueError("Choose callback discovery or live event delivery.")
-        if event_hosts:
-            if not all(re.fullmatch(r"(?:[a-z0-9][a-z0-9-]*\.)+[a-z][a-z0-9-]*", host) for host in event_hosts):
-                raise ValueError("MCP Events requires exact HTTPS callback hostnames.")
+        if event_key:
             try:
                 Fernet(event_key)
             except (ValueError, Error) as exc:
                 raise ValueError("Configure a Fernet key for MCP Events signing secrets.") from exc
         return cls(f"https://{domain}", port, volume / "agentcollab-staging.sqlite3", password_hash,
-                   code, int(expires or 0), local_accounts, event_hosts, event_key, event_discovery_only)
+                   code, int(expires or 0), local_accounts, event_key, event_discovery_only)
 
     def allows(self, authorization):
         scheme, _, encoded = authorization.partition(" ")

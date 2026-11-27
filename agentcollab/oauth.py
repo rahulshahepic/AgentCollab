@@ -30,6 +30,7 @@ GRANT_SECONDS = 30 * 24 * 60 * 60
 CHATGPT_REDIRECT = re.compile(
     r"https://chatgpt\.com/(?:connector_platform_oauth_redirect|connector/oauth/[A-Za-z0-9_-]{1,128})"
 )
+CHATGPT_EVENT_CALLBACK_HOST = "connectors.api.openai.com"
 EXACT_REDIRECT_PROVIDERS = {
     "https://agent.meta.ai/api/hatch/oauth/callback": "muse",
     "https://claude.ai/api/mcp/auth_callback": "claude",

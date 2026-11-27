@@ -127,13 +127,12 @@ class StagingOAuthTests(unittest.TestCase):
         with self.store.session() as db:
             self.assertEqual(db.execute("SELECT count(*) FROM event_subscriptions").fetchone()[0], 0)
             self.assertEqual(db.execute("SELECT count(*) FROM event_outbox").fetchone()[0], 0)
-        resumed = InboxEvents(self.store, StagingOAuth(self.store, self.resource),
-                              ("receiver.example.com",), Fernet.generate_key())
+        resumed = InboxEvents(self.store, StagingOAuth(self.store, self.resource), Fernet.generate_key())
         self.assertFalse(resumed.dispatch_one())
 
     def test_chatgpt_events_are_agent_scoped_and_retry_with_the_same_id(self):
         signing_key = b"s" * 32
-        callback_host = "receiver.example.com"
+        callback_host = "connectors.api.openai.com"
         callback = f"https://{callback_host}/mcp-events/main"
         key = Fernet.generate_key()
         deliveries = []
@@ -155,7 +154,7 @@ class StagingOAuthTests(unittest.TestCase):
             pass
 
         with patch.object(InboxEvents, "post", side_effect=receive), patch.object(InboxEvents, "run", idle):
-            config = replace(self.config, event_hosts=(callback_host,), event_key=key.decode())
+            config = replace(self.config, event_key=key.decode())
             app = create_app(config.database, 3000, staging=config)
             with TestClient(app, base_url=self.origin, follow_redirects=False) as client:
                 self.client = client
@@ -183,14 +182,15 @@ class StagingOAuthTests(unittest.TestCase):
                     "mode": "webhook", "url": callback,
                     "secret": "whsec_" + base64.b64encode(signing_key).decode(),
                 }}
-                wrong = options | {"delivery": options["delivery"] | {"url": "https://other.example.com/events"}}
-                self.assertEqual(call("events/subscribe", wrong).json()["error"]["code"], -32015)
+                for rejected in ("https://other.example.com/events", f"https://{callback_host}.example.com/events"):
+                    wrong = options | {"delivery": options["delivery"] | {"url": rejected}}
+                    self.assertEqual(call("events/subscribe", wrong).json()["error"]["code"], -32015)
                 sub = call("events/subscribe", options).json()["result"]["id"]
                 self.assertEqual(call("events/subscribe", options).json()["result"]["id"], sub)
                 self.assertTrue(self.result(self.rpc(token))["identity"]["push"])
                 sent = self.result(self.rpc(self.other_token, "send_message", to_agent_id=self.agent,
                                             text="synthetic message", request_id="push-test"))
-                dispatcher = InboxEvents(self.store, StagingOAuth(self.store, self.resource), (callback_host,), key,
+                dispatcher = InboxEvents(self.store, StagingOAuth(self.store, self.resource), key,
                                          transport=receive)
                 self.assertTrue(dispatcher.dispatch_one())
                 self.assertFalse(dispatcher.dispatch_one())
@@ -210,7 +210,7 @@ class StagingOAuthTests(unittest.TestCase):
                     self.assertTrue(dispatcher.dispatch_one())
                 restarted = Store(config.database)
                 dispatcher = InboxEvents(restarted, StagingOAuth(restarted, self.resource),
-                                         (callback_host,), key, transport=receive)
+                                         key, transport=receive)
                 self.assertFalse(dispatcher.dispatch_one())
                 self.assertEqual(dispatcher.failures(STAGING_WORKSPACE)[0]["message_id"], failed["message_id"])
                 self.assertEqual(dispatcher.failures(LOCAL_WORKSPACE), [])
