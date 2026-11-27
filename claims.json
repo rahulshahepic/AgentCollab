@@ -6,7 +6,7 @@
       "batch": "milestone-8-issue-10",
       "mode": "manual",
       "branch": "codex/m8-issue-10-smoke",
-      "pr": null,
+      "pr": 14,
       "expires_at": null
     }
   }
