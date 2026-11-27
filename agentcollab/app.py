@@ -167,7 +167,7 @@ def activity_page(store, workspace, *, can_sign_out=False):
 <span class="status">{state}</span></span><span class="preview">{escape(row['body'][:140])}</span>
 <time datetime="{timestamp}">{timestamp[:16].replace('T', ' ')} UTC</time></summary>
 <div class="transaction-detail">{detail}</div></details>""")
-    return page("Activity", '<section aria-label="Recent messages">' + "".join(rows) + '</section>')
+    return page("Activity", '<section aria-label="Recent messages">' + "".join(rows) + '</section>' + sign_out)
 
 
 def agents_page(store, workspace, *, error=None):
