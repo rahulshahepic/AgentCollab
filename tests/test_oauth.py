@@ -153,6 +153,37 @@ class StagingOAuthTests(unittest.TestCase):
         self.assertIn("Cosworth", self.client.get(allowed, auth=self.owner).text)
         self.assertEqual(self.consent(allowed, agent=self.agent).status_code, 303)
 
+    def test_legacy_oauth_codes_respect_provider_binding_after_upgrade(self):
+        chatgpt_redirect = self.redirect
+        legacy_codes = {}
+        for agent in (self.agent, self.other):
+            client_id = self.register().json()["client_id"]
+            approved = self.consent(self.authorize(client_id).headers["location"], agent=agent)
+            legacy_codes[agent] = (client_id, parse_qs(urlsplit(approved.headers["location"]).query)["code"][0])
+
+        with self.store.session(write=True) as db:
+            db.execute("ALTER TABLE agents DROP COLUMN provider")
+        Store(self.config.database)
+
+        self.redirect = "https://claude.ai/api/mcp/auth_callback"
+        claude_id = self.register().json()["client_id"]
+        approved = self.consent(self.authorize(claude_id).headers["location"])
+        self.assertEqual(approved.status_code, 303)
+
+        rejected = self.exchange(*legacy_codes[self.agent], redirect_uri=chatgpt_redirect)
+        self.assertEqual(rejected.status_code, 400)
+        self.assertEqual(rejected.json()["error"], "invalid_grant")
+        claude_code = parse_qs(urlsplit(approved.headers["location"]).query)["code"][0]
+        claude_token = self.exchange(claude_id, claude_code).json()["access_token"]
+        self.assertEqual(self.result(self.rpc(claude_token))["identity"]["name"], "Cosworth")
+
+        accepted = self.exchange(*legacy_codes[self.other], redirect_uri=chatgpt_redirect)
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        self.assertEqual(self.result(self.rpc(accepted.json()["access_token"]))["identity"]["name"], "Other agent")
+        providers = {row["id"]: row["provider"] for row in self.store.list_agents(STAGING_WORKSPACE)}
+        self.assertEqual(providers[self.agent], "claude")
+        self.assertEqual(providers[self.other], "chatgpt")
+
     def test_registration_keeps_callbacks_on_one_provider(self):
         result = self.client.post("/register", json={
             "redirect_uris": [self.redirect, "https://claude.ai/api/mcp/auth_callback"],

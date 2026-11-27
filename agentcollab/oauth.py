@@ -191,16 +191,21 @@ class StagingOAuth:
         def exchange():
             digest = self.store.hash_token(authorization_code.code)
             now = int(time())
-            with self.store.session(write=True) as db:
-                if not self.unexpired(db, "oauth_codes", digest):
-                    raise TokenError("invalid_grant", "Authorization code is no longer valid.")
-                db.execute("DELETE FROM oauth_codes WHERE digest = ?", (digest,))
-                db.execute("DELETE FROM oauth_grants WHERE grant_expires <= ?", (now,))
-                try:
-                    self.store.active_agent(db, STAGING_WORKSPACE, authorization_code.subject)
-                except StoreError as exc:
-                    raise TokenError("invalid_grant", "Agent connection was revoked.") from exc
-                return self.issue(db, client.client_id, authorization_code.subject, now, now + GRANT_SECONDS)
+            try:
+                with self.store.session(write=True) as db:
+                    if not self.unexpired(db, "oauth_codes", digest):
+                        raise StoreError("Authorization code is no longer valid.")
+                    agent = self.store.active_agent(db, STAGING_WORKSPACE, authorization_code.subject)
+                    provider = redirect_provider(str(authorization_code.redirect_uri))
+                    if provider is None or not self.compatible_agent(db, agent, provider):
+                        raise StoreError("Agent is no longer available for this provider.")
+                    db.execute("DELETE FROM oauth_codes WHERE digest = ?", (digest,))
+                    db.execute("DELETE FROM oauth_grants WHERE grant_expires <= ?", (now,))
+                    if agent["provider"] != provider:
+                        db.execute("UPDATE agents SET provider = ? WHERE id = ?", (provider, agent["id"]))
+                    return self.issue(db, client.client_id, agent["id"], now, now + GRANT_SECONDS)
+            except StoreError as exc:
+                raise TokenError("invalid_grant", str(exc)) from exc
         return await run_in_threadpool(exchange)
 
     def issue(self, db, client_id, agent_id, now, grant_expires):
