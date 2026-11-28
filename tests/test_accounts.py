@@ -88,17 +88,29 @@ class OwnerAccountTests(unittest.TestCase):
                 clock.return_value = 180
                 self.assertEqual(restarted.post("/login", headers=self.headers, data=credentials).status_code, 303)
 
-    def test_setup_and_login_have_separate_budgets_behind_configured_edge(self):
-        self.config = replace(self.config, trust_railway_http_edge=True)
-        first = self.headers | {"X-Real-IP": "192.0.2.1"}
-        second = self.headers | {"X-Real-IP": "192.0.2.2"}
+    def test_setup_and_login_have_separate_budgets_behind_authenticated_proxy(self):
+        token = "P" * 43
+        self.config = replace(self.config, account_proxy_token_hash=hashlib.sha256(token.encode()).hexdigest())
+        proxy = self.headers | {"X-AgentCollab-Proxy-Token": token}
+        first = proxy | {"X-AgentCollab-Client-IP": "192.0.2.1"}
+        second = proxy | {"X-AgentCollab-Client-IP": "192.0.2.2"}
         data = {"username": "pilot-owner", "password": self.password}
         with patch("agentcollab.app.ACCOUNT_REQUESTS_PER_PEER", 1), patch(
             "agentcollab.rate_limits.time", return_value=121
         ), TestClient(self.app(), base_url=self.origin, follow_redirects=False) as client:
+            self.assertEqual(client.post("/setup", headers=self.headers, data=data).status_code, 403)
             self.assertEqual(client.post("/setup", headers=first, data=data | {"code": self.code}).status_code, 303)
             self.assertEqual(client.post("/login", headers=first, data=data).status_code, 303)
             self.assertEqual(client.post("/login", headers=first, data=data).status_code, 429)
+            for headers in (
+                self.headers | {"X-AgentCollab-Client-IP": "192.0.2.2"},
+                second | {"X-AgentCollab-Proxy-Token": "X" * 43},
+                second | {"X-AgentCollab-Client-IP": "not-an-address"},
+                [*second.items(), ("X-AgentCollab-Client-IP", "192.0.2.3")],
+                [*second.items(), ("X-AgentCollab-Proxy-Token", token)],
+            ):
+                with self.subTest(headers=headers):
+                    self.assertEqual(client.post("/login", headers=headers, data=data).status_code, 403)
             self.assertEqual(client.post("/login", headers=second, data=data).status_code, 303)
 
     def test_account_login_preserves_oauth_authorize_request(self):

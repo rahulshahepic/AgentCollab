@@ -63,6 +63,7 @@ class StagingTests(unittest.TestCase):
             "RAILWAY_VOLUME_MOUNT_PATH": "/",
             "PORT": "70000",
             "AGENTCOLLAB_OWNER_PASSWORD_SHA256": "password",
+            "AGENTCOLLAB_ACCOUNT_PROXY_TOKEN_SHA256": "not-a-digest",
         }.items():
             with self.subTest(key=key), self.assertRaises(ValueError):
                 StagingConfig.from_environment(self.env | {key: invalid})
