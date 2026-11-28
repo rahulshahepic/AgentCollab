@@ -22,7 +22,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
 
-from .oauth import SCOPE, redirect_provider
+from .oauth import CHATGPT_EVENT_CALLBACK_HOST, SCOPE, redirect_provider
 from .store import StoreError
 
 EVENT = "inbox.message_received"
@@ -68,10 +68,9 @@ class PublicHTTPSConnection(HTTPSConnection):
 
 
 class InboxEvents:
-    def __init__(self, store, oauth, hosts, encryption_key, *, transport=None, discovery_only=False):
+    def __init__(self, store, oauth, encryption_key, *, transport=None, discovery_only=False):
         self.store = store
         self.oauth = oauth
-        self.hosts = frozenset(hosts)
         self.discovery_only = discovery_only
         self.encryption = None if discovery_only else Fernet(encryption_key)
         self.transport = self.post if transport is None else transport
@@ -95,7 +94,7 @@ class InboxEvents:
 
     def destination(self, url):
         target = self.callback_url(url)
-        if target.hostname not in self.hosts:
+        if target.hostname != CHATGPT_EVENT_CALLBACK_HOST:
             raise CallbackError("invalid_url")
         return target
 
@@ -169,7 +168,7 @@ class InboxEvents:
                 WHERE s.agent_id = ? AND s.expires > unixepoch() AND g.grant_expires > unixepoch()
             """, (agent_id,))
             for row in urls:
-                if urlsplit(row["url"]).netloc in self.hosts:
+                if urlsplit(row["url"]).netloc == CHATGPT_EVENT_CALLBACK_HOST:
                     return True
         return False
 
