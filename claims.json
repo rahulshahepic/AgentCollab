@@ -32,6 +32,14 @@
       "branch": "codex/pilot-rate-limits",
       "pr": 29,
       "expires_at": null
+    },
+    "30": {
+      "owner": "pilot-accounts-1795857099652",
+      "batch": "issue-30-pilot-accounts",
+      "mode": "manual",
+      "branch": "codex/pilot-accounts",
+      "pr": null,
+      "expires_at": null
     }
   }
 }
