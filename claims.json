@@ -10,7 +10,7 @@
       "expires_at": null
     },
     "21": {
-      "owner": "chatgpt-push-1795760857403",
+      "owner": "maintainer-staging-handoff-1795851335293",
       "batch": "issue-21-chatgpt-mcp-events",
       "mode": "manual",
       "branch": "codex/provider-callback-policy",
@@ -18,11 +18,11 @@
       "expires_at": null
     },
     "26": {
-      "owner": "pilot-origin-1795787008025",
+      "owner": "maintainer-staging-handoff-1795851335293",
       "batch": "issue-26-pilot-origin",
       "mode": "manual",
       "branch": "codex/pilot-staging-origin",
-      "pr": null,
+      "pr": 27,
       "expires_at": null
     }
   }
