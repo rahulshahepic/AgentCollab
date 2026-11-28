@@ -130,6 +130,44 @@ class StagingOAuthTests(unittest.TestCase):
         resumed = InboxEvents(self.store, StagingOAuth(self.store, self.resource), Fernet.generate_key())
         self.assertFalse(resumed.dispatch_one())
 
+    def test_origin_change_retires_previous_grants_and_queued_events(self):
+        def authorize_agent():
+            client_id = self.register().json()["client_id"]
+            approved = self.consent(self.authorize(client_id).headers["location"])
+            code = parse_qs(urlsplit(approved.headers["location"]).query)["code"][0]
+            return client_id, self.exchange(client_id, code).json()
+
+        old_client, old_grant = authorize_agent()
+        old_access = old_grant["access_token"]
+        old_consent = self.authorize(old_client).headers["location"]
+        with self.store.session(write=True) as db:
+            db.execute("""INSERT INTO event_subscriptions VALUES
+                          ('old', ?, ?, 'https://connectors.api.openai.com/test', X'00', unixepoch() + 600)""",
+                       (old_client, self.agent))
+        message_id = self.store.send(STAGING_WORKSPACE, self.other, self.agent, "queued fixture", "origin-change")
+
+        same_origin = create_app(self.config.database, 3000, staging=self.config)
+        with TestClient(same_origin, base_url=self.origin) as client:
+            self.assertEqual(self.rpc(old_access, client=client).status_code, 200)
+        with self.store.session() as db:
+            self.assertEqual(db.execute("SELECT message_id FROM event_outbox").fetchone()[0], message_id)
+
+        self.origin = "https://staging.agentcollab.example"
+        self.resource = f"{self.origin}/mcp"
+        config = replace(self.config, origin=self.origin)
+        app = create_app(config.database, 3000, staging=config)
+        with TestClient(app, base_url=self.origin, follow_redirects=False) as client:
+            self.client = client
+            self.assertEqual(self.rpc(old_access).status_code, 401)
+            self.assertIn(self.refresh(old_client, old_grant["refresh_token"]).status_code, (400, 401))
+            self.assertEqual(self.consent(old_consent).status_code, 400)
+            with self.store.session() as db:
+                for table in ("oauth_grants", "event_subscriptions", "event_outbox"):
+                    self.assertEqual(db.execute(f"SELECT count(*) FROM {table}").fetchone()[0], 0)
+            _, new_grant = authorize_agent()
+            self.assertEqual(self.rpc(new_grant["access_token"]).status_code, 200)
+            self.assertEqual(self.rpc(self.other_token).status_code, 200)
+
     def test_chatgpt_events_are_agent_scoped_and_retry_with_the_same_id(self):
         signing_key = b"s" * 32
         callback_host = "connectors.api.openai.com"

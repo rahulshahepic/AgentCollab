@@ -66,6 +66,8 @@ Set `AGENTCOLLAB_STAGING_ORIGIN` to the exact HTTPS origin, such as
 variable to use the generated Railway domain. The app uses one canonical
 hostname for browser and MCP requests. Reconnect existing clients to the
 new `/mcp` URL and verify OAuth and push after changing it.
+Switching origins retires OAuth grants and queued push deliveries from the
+previous origin. Reauthorize and resubscribe each OAuth client after cutover.
 
 Enable Railway's **Wait for CI** setting on the staging source. Railway
 checks `/health` before routing traffic to the new deployment.
