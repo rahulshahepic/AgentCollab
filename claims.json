@@ -24,6 +24,14 @@
       "branch": "codex/pilot-staging-origin",
       "pr": 27,
       "expires_at": null
+    },
+    "28": {
+      "owner": "pilot-rate-limits-1795855709533",
+      "batch": "issue-28-pilot-rate-limits",
+      "mode": "manual",
+      "branch": "codex/pilot-rate-limits",
+      "pr": null,
+      "expires_at": null
     }
   }
 }
