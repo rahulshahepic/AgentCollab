@@ -38,7 +38,7 @@
       "batch": "issue-30-pilot-accounts",
       "mode": "manual",
       "branch": "codex/pilot-accounts",
-      "pr": null,
+      "pr": 31,
       "expires_at": null
     }
   }
