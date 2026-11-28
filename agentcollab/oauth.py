@@ -59,6 +59,12 @@ class StagingOAuth:
         with store.session(write=True) as db:
             db.execute("INSERT OR IGNORE INTO oauth_issuer (id, signing_key) VALUES (1, ?)", (token_bytes(32),))
             self.signing_key = db.execute("SELECT signing_key FROM oauth_issuer WHERE id = 1").fetchone()[0]
+            # Client IDs are signed for the issuing resource, including on older databases.
+            # Deleting old-origin grants also removes their subscriptions and queued events.
+            grants = db.execute("SELECT client_id FROM oauth_grants").fetchall()
+            db.executemany("DELETE FROM oauth_grants WHERE client_id = ?", (
+                (row["client_id"],) for row in grants if self.registered_client(row["client_id"]) is None
+            ))
 
     def sign(self, purpose, value):
         message = f"{self.resource} {purpose} {value}".encode()
@@ -150,6 +156,8 @@ class StagingOAuth:
                 raise StoreError("This consent request has expired. Reconnect from your agent provider.")
             pending = PendingConsent.model_validate_json(row["data"])
             params = pending.params
+            if params.resource != self.resource or self.registered_client(pending.client_id) is None:
+                raise StoreError("This consent request has expired. Reconnect from your agent provider.")
             db.execute("DELETE FROM oauth_requests WHERE digest = ?", (digest,))
             if not approved:
                 return construct_redirect_uri(str(params.redirect_uri), state=params.state, error="access_denied")
@@ -183,7 +191,7 @@ class StagingOAuth:
                 row = self.unexpired(db, "oauth_codes", self.store.hash_token(code))
             if row:
                 record = AuthorizationCode.model_validate_json(row["data"])
-                if record.client_id == client.client_id:
+                if record.client_id == client.client_id and record.resource == self.resource:
                     return record.model_copy(update={"code": code})
             return None
         return await run_in_threadpool(read)
@@ -227,10 +235,13 @@ class StagingOAuth:
     def grant(self, db, digest, *, refresh=False):
         column = "refresh_digest" if refresh else "access_digest"
         expiry = "grant_expires" if refresh else "access_expires"
-        return db.execute(f"""
+        row = db.execute(f"""
             SELECT g.* FROM oauth_grants g JOIN agents a ON a.id = g.agent_id
             WHERE g.{column} = ? AND g.{expiry} > ? AND a.workspace = ? AND a.disconnected = 0
         """, (digest, time(), STAGING_WORKSPACE)).fetchone()
+        if row and self.registered_client(row["client_id"]) is not None:
+            return row
+        return None
 
     async def load_access_token(self, token):
         def read():

@@ -19,6 +19,8 @@ from .accounts import SESSION_COOKIE, TOKEN, return_path
 
 STAGING_WORKSPACE = "railway-staging"
 RAILWAY_HEALTH_HOST = "healthcheck.railway.app"
+DNS_LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+DNS_HOST = re.compile(rf"(?:{DNS_LABEL}\.)+[a-z](?:[a-z0-9-]{{0,61}}[a-z0-9])?")
 PUBLIC_PATHS = {
     "/health", "/mcp", "/.well-known/oauth-protected-resource/mcp",
     "/.well-known/oauth-authorization-server", "/register", "/token", "/revoke",
@@ -43,9 +45,17 @@ class StagingConfig:
 
     @classmethod
     def from_environment(cls, env):
-        domain = env.get("RAILWAY_PUBLIC_DOMAIN", "")
-        if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.up\.railway\.app", domain):
-            raise ValueError("A generated Railway HTTPS domain is required.")
+        origin = env.get("AGENTCOLLAB_STAGING_ORIGIN")
+        if origin is None:
+            domain = env.get("RAILWAY_PUBLIC_DOMAIN", "")
+            if not re.fullmatch(rf"{DNS_LABEL}\.up\.railway\.app", domain):
+                raise ValueError("A generated Railway HTTPS domain is required.")
+            origin = f"https://{domain}"
+        else:
+            host = origin.removeprefix("https://")
+            if (not origin.startswith("https://") or len(host) > 253
+                    or not DNS_HOST.fullmatch(host) or host == RAILWAY_HEALTH_HOST):
+                raise ValueError("AGENTCOLLAB_STAGING_ORIGIN must be an HTTPS origin with an exact DNS hostname.")
         try:
             port = int(env.get("PORT", ""))
         except ValueError:
@@ -72,7 +82,7 @@ class StagingConfig:
                 Fernet(event_key)
             except (ValueError, Error) as exc:
                 raise ValueError("Configure a Fernet key for MCP Events signing secrets.") from exc
-        return cls(f"https://{domain}", port, volume / "agentcollab-staging.sqlite3", password_hash,
+        return cls(origin, port, volume / "agentcollab-staging.sqlite3", password_hash,
                    code, int(expires or 0), local_accounts, event_key, event_discovery_only)
 
     def allows(self, authorization):

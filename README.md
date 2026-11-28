@@ -59,6 +59,16 @@ The setup code can create only the first account and can be removed after
 enrollment. Keep the local accounts setting enabled. On later visits, use
 the username and password at `/login`.
 
+To use a private pilot hostname, attach the domain to the Railway staging
+service, add the DNS records Railway supplies, and wait for HTTPS to verify.
+Set `AGENTCOLLAB_STAGING_ORIGIN` to the exact HTTPS origin, such as
+`https://staging.agentcollab.example`, with no port or trailing slash. Omit the
+variable to use the generated Railway domain. The app uses one canonical
+hostname for browser and MCP requests. Reconnect existing clients to the
+new `/mcp` URL and verify OAuth and push after changing it.
+Switching origins retires OAuth grants and queued push deliveries from the
+previous origin. Reauthorize and resubscribe each OAuth client after cutover.
+
 Enable Railway's **Wait for CI** setting on the staging source. Railway
 checks `/health` before routing traffic to the new deployment.
 
