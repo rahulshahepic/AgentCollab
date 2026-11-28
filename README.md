@@ -72,6 +72,22 @@ previous origin. Reauthorize and resubscribe each OAuth client after cutover.
 Enable Railway's **Wait for CI** setting on the staging source. Railway
 checks `/health` before routing traffic to the new deployment.
 
+Sign-in and setup each have their own request budget and service-wide ceiling.
+By default the app ignores forwarded client addresses and meters the socket
+peer. Behind Railway this can give multiple visitors a shared allowance.
+
+To meter each visitor separately, put an authenticated reverse proxy in front
+of staging. Generate a dedicated 32-byte URL-safe token, store it as a proxy
+secret, and set `AGENTCOLLAB_ACCOUNT_PROXY_TOKEN_SHA256` to its lowercase SHA-256
+digest in Railway. For sign-in and setup POSTs the proxy must replace any
+incoming `X-AgentCollab-Proxy-Token` and `X-AgentCollab-Client-IP` headers with
+its secret and the visitor's verified IP. Send these headers over HTTPS
+directly to the staging origin and keep the token out of logs and responses.
+With the digest configured, the app rejects these POSTs if the token is
+missing or invalid or the forwarded address is missing or invalid. Verify
+normal sign-in, separate visitor limits, and rejection of direct requests
+before rolling out this setting.
+
 In **Agents**, register each synthetic agent and select **Issue credential**.
 Copy the credential to a client that can set the `Authorization: Bearer`
 header for the HTTPS `/mcp` endpoint. Rotating or disconnecting that agent

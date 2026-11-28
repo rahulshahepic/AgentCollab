@@ -6,6 +6,7 @@ from binascii import Error
 from dataclasses import dataclass, field
 from hashlib import sha256
 from hmac import compare_digest
+from ipaddress import ip_address
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode
 
@@ -38,10 +39,25 @@ class StagingConfig:
     local_accounts: bool = False
     event_key: str = field(default="", repr=False)
     event_discovery_only: bool = False
+    account_proxy_token_hash: str = field(default="", repr=False)
 
     @property
     def host(self):
         return self.origin.removeprefix("https://")
+
+    def browser_peer(self, request):
+        if not self.account_proxy_token_hash:
+            return request.client.host if request.client and request.client.host else "unknown"
+        tokens = request.headers.getlist("x-agentcollab-proxy-token")
+        addresses = request.headers.getlist("x-agentcollab-client-ip")
+        if len(tokens) != 1 or len(addresses) != 1 or not TOKEN.fullmatch(tokens[0]):
+            return None
+        if not compare_digest(sha256(tokens[0].encode()).hexdigest(), self.account_proxy_token_hash):
+            return None
+        try:
+            return str(ip_address(addresses[0]))
+        except ValueError:
+            return None
 
     @classmethod
     def from_environment(cls, env):
@@ -82,8 +98,12 @@ class StagingConfig:
                 Fernet(event_key)
             except (ValueError, Error) as exc:
                 raise ValueError("Configure a Fernet key for MCP Events signing secrets.") from exc
+        account_proxy_token_hash = env.get("AGENTCOLLAB_ACCOUNT_PROXY_TOKEN_SHA256", "")
+        if account_proxy_token_hash and not re.fullmatch(r"[a-f0-9]{64}", account_proxy_token_hash):
+            raise ValueError("Configure the SHA-256 digest of the generated account proxy token.")
         return cls(origin, port, volume / "agentcollab-staging.sqlite3", password_hash,
-                   code, int(expires or 0), local_accounts, event_key, event_discovery_only)
+                   code, int(expires or 0), local_accounts, event_key, event_discovery_only,
+                   account_proxy_token_hash)
 
     def allows(self, authorization):
         scheme, _, encoded = authorization.partition(" ")

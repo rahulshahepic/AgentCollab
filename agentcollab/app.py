@@ -29,6 +29,10 @@ from starlette.staticfiles import StaticFiles
 from .accounts import OwnerAccounts, SESSION_COOKIE, SESSION_SECONDS, return_path
 from .events import InboxEvents
 from .oauth import SCOPE, StagingOAuth, redirect_provider
+from .rate_limits import (
+    ACCOUNT_REQUESTS_PER_PEER, ACCOUNT_REQUESTS_TOTAL, INBOX_REQUESTS_PER_AGENT,
+    INBOX_REQUESTS_TOTAL, RequestLimits,
+)
 from .staging import RAILWAY_HEALTH_HOST, STAGING_WORKSPACE, StagingBoundary, StagingConfig
 from .store import AGENT_PROVIDERS, Store, StoreError
 
@@ -53,7 +57,7 @@ class WorkspaceTokens(TokenVerifier):
                            subject=workspace, resource=self.resource)
 
 
-def create_mcp(store, port, staging, oauth, events=None):
+def create_mcp(store, port, staging, oauth, events=None, *, limits=None):
     origin = staging.origin if staging else f"http://127.0.0.1:{port}"
     resource = f"{origin}/mcp"
     server = FastMCP(
@@ -102,9 +106,13 @@ def create_mcp(store, port, staging, oauth, events=None):
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
     def read_inbox(message_id: str | None = None, cursor: str | None = None) -> dict[str, Any]:
         """Read incoming messages and record that they were fetched. A reply needs no answer."""
+        workspace, agent_id = caller()
+        if limits:
+            retry = limits.consume("inbox", agent_id, INBOX_REQUESTS_PER_AGENT, INBOX_REQUESTS_TOTAL)
+            if retry:
+                raise ToolError(f"Inbox rate limit reached. Retry in {retry} seconds.")
         if message_id is not None and cursor is not None:
             raise ToolError("Supply a message ID or a page cursor.")
-        workspace, agent_id = caller()
         return invoke(store.inbox, workspace, agent_id, message_id=message_id, cursor=cursor)
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
@@ -135,7 +143,7 @@ def public_agent(agent, events):
             "push": events is not None and events.has_subscription(agent["id"])}
 
 
-def page(section, body, *, status=200):
+def page(section, body, *, status=200, extra_headers=None):
     nav = "".join(
         f'<a href="{path}"' + (' aria-current="page"' if title == section else '') + f'>{title}</a>'
         for path, title in (("/", "Activity"), ("/agents", "Agents"))
@@ -150,6 +158,7 @@ def page(section, body, *, status=200):
         "X-Content-Type-Options": "nosniff",
         # Chromium needs a same-origin referrer policy to send Origin on HTML form POSTs.
         "Referrer-Policy": "same-origin",
+        **(extra_headers or {}),
     })
 
 
@@ -235,6 +244,7 @@ async def form_fields(request, *, limit=1024):
 def create_app(database: Path, port: int = 8000, *, staging: StagingConfig | None = None):
     workspace = STAGING_WORKSPACE if staging else LOCAL_WORKSPACE
     store = Store(database)
+    limits = RequestLimits(store) if staging else None
     accounts = None
     if staging and (staging.local_accounts or staging.owner_setup_code):
         accounts = OwnerAccounts(store, staging.owner_setup_code, staging.owner_setup_expires)
@@ -243,7 +253,7 @@ def create_app(database: Path, port: int = 8000, *, staging: StagingConfig | Non
         InboxEvents(store, oauth, staging.event_key, discovery_only=staging.event_discovery_only)
         if staging and (staging.event_key or staging.event_discovery_only) else None
     )
-    server = create_mcp(store, port, staging, oauth, events)
+    server = create_mcp(store, port, staging, oauth, events, limits=limits)
     mcp_app = server.streamable_http_app()
     if events:
         for route in mcp_app.routes:
@@ -313,6 +323,15 @@ def create_app(database: Path, port: int = 8000, *, staging: StagingConfig | Non
         if request.method == "POST":
             if request.headers.get("origin") != staging.origin:
                 raise HTTPException(403)
+            peer = staging.browser_peer(request)
+            if peer is None:
+                raise HTTPException(403)
+            flow = "setup" if setup else "login"
+            retry = await run_in_threadpool(limits.consume, flow, peer, ACCOUNT_REQUESTS_PER_PEER,
+                                            ACCOUNT_REQUESTS_TOTAL)
+            if retry:
+                return page("Try again soon", "<p>Too many sign-in or setup attempts. Please try again shortly.</p>",
+                            status=429, extra_headers={"Retry-After": str(retry)})
             form = await form_fields(request, limit=8192)
             target = return_path(form.get("next", ["/"])[0])
             username = form.get("username", [""])[0].strip()
