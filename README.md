@@ -72,6 +72,14 @@ previous origin. Reauthorize and resubscribe each OAuth client after cutover.
 Enable Railway's **Wait for CI** setting on the staging source. Railway
 checks `/health` before routing traffic to the new deployment.
 
+Sign-in and setup each have their own request budget. By default the app
+uses the socket peer and ignores client address headers. On an isolated
+staging service reached through Railway's public HTTP edge, set
+`AGENTCOLLAB_TRUST_RAILWAY_HTTP_EDGE=1` to use the edge's overwritten
+`X-Real-IP` header. Enable this only after confirming every private-network
+caller is trusted and there is no public TCP proxy. Private traffic bypasses
+the edge's header normalization. Each flow also has a service-wide ceiling.
+
 In **Agents**, register each synthetic agent and select **Issue credential**.
 Copy the credential to a client that can set the `Authorization: Bearer`
 header for the HTTPS `/mcp` endpoint. Rotating or disconnecting that agent

@@ -6,6 +6,7 @@ from binascii import Error
 from dataclasses import dataclass, field
 from hashlib import sha256
 from hmac import compare_digest
+from ipaddress import ip_address
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode
 
@@ -38,10 +39,22 @@ class StagingConfig:
     local_accounts: bool = False
     event_key: str = field(default="", repr=False)
     event_discovery_only: bool = False
+    trust_railway_http_edge: bool = False
 
     @property
     def host(self):
         return self.origin.removeprefix("https://")
+
+    def browser_peer(self, request):
+        peer = request.client.host if request.client and request.client.host else "unknown"
+        if self.trust_railway_http_edge:
+            values = request.headers.getlist("x-real-ip")
+            if len(values) == 1:
+                try:
+                    return str(ip_address(values[0]))
+                except ValueError:
+                    pass
+        return peer
 
     @classmethod
     def from_environment(cls, env):
@@ -83,7 +96,8 @@ class StagingConfig:
             except (ValueError, Error) as exc:
                 raise ValueError("Configure a Fernet key for MCP Events signing secrets.") from exc
         return cls(origin, port, volume / "agentcollab-staging.sqlite3", password_hash,
-                   code, int(expires or 0), local_accounts, event_key, event_discovery_only)
+                   code, int(expires or 0), local_accounts, event_key, event_discovery_only,
+                   env.get("AGENTCOLLAB_TRUST_RAILWAY_HTTP_EDGE") == "1")
 
     def allows(self, authorization):
         scheme, _, encoded = authorization.partition(" ")

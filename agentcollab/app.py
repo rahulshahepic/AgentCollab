@@ -323,9 +323,8 @@ def create_app(database: Path, port: int = 8000, *, staging: StagingConfig | Non
         if request.method == "POST":
             if request.headers.get("origin") != staging.origin:
                 raise HTTPException(403)
-            # Uvicorn disables forwarded headers. Shared proxy peers share the peer budget.
-            peer = request.client.host if request.client and request.client.host else "unknown"
-            retry = await run_in_threadpool(limits.consume, "account", peer,
+            flow = "setup" if setup else "login"
+            retry = await run_in_threadpool(limits.consume, flow, staging.browser_peer(request),
                                             ACCOUNT_REQUESTS_PER_PEER, ACCOUNT_REQUESTS_TOTAL)
             if retry:
                 return page("Try again soon", "<p>Too many sign-in or setup attempts. Please try again shortly.</p>",

@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from time import time
@@ -76,7 +77,8 @@ class OwnerAccountTests(unittest.TestCase):
                 self.assertEqual(self.client.post("/login", headers=self.headers,
                                                   data=credentials | {"password": "wrong"}).status_code, 401)
             with TestClient(self.app(), base_url=self.origin, follow_redirects=False) as restarted:
-                response = restarted.post("/login", headers=self.headers | {"X-Forwarded-For": "192.0.2.4"},
+                response = restarted.post("/login", headers=self.headers | {
+                                              "X-Forwarded-For": "192.0.2.4", "X-Real-IP": "192.0.2.4"},
                                           data=credentials)
                 self.assertEqual(response.status_code, 429)
                 self.assertEqual(response.headers["retry-after"], "59")
@@ -85,6 +87,19 @@ class OwnerAccountTests(unittest.TestCase):
                     self.assertEqual(other.post("/login", headers=self.headers, data=credentials).status_code, 303)
                 clock.return_value = 180
                 self.assertEqual(restarted.post("/login", headers=self.headers, data=credentials).status_code, 303)
+
+    def test_setup_and_login_have_separate_budgets_behind_configured_edge(self):
+        self.config = replace(self.config, trust_railway_http_edge=True)
+        first = self.headers | {"X-Real-IP": "192.0.2.1"}
+        second = self.headers | {"X-Real-IP": "192.0.2.2"}
+        data = {"username": "pilot-owner", "password": self.password}
+        with patch("agentcollab.app.ACCOUNT_REQUESTS_PER_PEER", 1), patch(
+            "agentcollab.rate_limits.time", return_value=121
+        ), TestClient(self.app(), base_url=self.origin, follow_redirects=False) as client:
+            self.assertEqual(client.post("/setup", headers=first, data=data | {"code": self.code}).status_code, 303)
+            self.assertEqual(client.post("/login", headers=first, data=data).status_code, 303)
+            self.assertEqual(client.post("/login", headers=first, data=data).status_code, 429)
+            self.assertEqual(client.post("/login", headers=second, data=data).status_code, 303)
 
     def test_account_login_preserves_oauth_authorize_request(self):
         registration = self.client.post("/register", json={
