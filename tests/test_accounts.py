@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from time import time
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
 from starlette.testclient import TestClient
@@ -65,6 +66,25 @@ class OwnerAccountTests(unittest.TestCase):
         self.assertEqual(login.status_code, 303)
         self.assertEqual(login.headers["location"], "/agents")
         self.assertEqual(self.client.get("/agents").status_code, 200)
+
+    def test_login_quota_uses_peer_and_survives_restart(self):
+        self.assertEqual(self.setup_account().status_code, 303)
+        credentials = {"username": "pilot-owner", "password": self.password}
+        with patch("agentcollab.app.ACCOUNT_REQUESTS_PER_PEER", 2), patch("agentcollab.rate_limits.time") as clock:
+            clock.return_value = 121
+            for _ in range(2):
+                self.assertEqual(self.client.post("/login", headers=self.headers,
+                                                  data=credentials | {"password": "wrong"}).status_code, 401)
+            with TestClient(self.app(), base_url=self.origin, follow_redirects=False) as restarted:
+                response = restarted.post("/login", headers=self.headers | {"X-Forwarded-For": "192.0.2.4"},
+                                          data=credentials)
+                self.assertEqual(response.status_code, 429)
+                self.assertEqual(response.headers["retry-after"], "59")
+                with TestClient(self.app(), base_url=self.origin, follow_redirects=False,
+                                client=("192.0.2.4", 50000)) as other:
+                    self.assertEqual(other.post("/login", headers=self.headers, data=credentials).status_code, 303)
+                clock.return_value = 180
+                self.assertEqual(restarted.post("/login", headers=self.headers, data=credentials).status_code, 303)
 
     def test_account_login_preserves_oauth_authorize_request(self):
         registration = self.client.post("/register", json={

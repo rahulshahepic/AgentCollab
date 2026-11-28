@@ -2,6 +2,7 @@ import unittest
 from hashlib import sha256
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from starlette.testclient import TestClient
 
@@ -102,6 +103,25 @@ class StagingTests(unittest.TestCase):
                         "https://user@staging.example", "https://127.0.0.1", f"https://{RAILWAY_HEALTH_HOST}"):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 StagingConfig.from_environment(self.env | {"AGENTCOLLAB_STAGING_ORIGIN": invalid})
+
+    def test_inbox_quota_is_per_agent_with_a_staging_budget(self):
+        tokens = [self.credential(self.store.add_agent(STAGING_WORKSPACE, name))
+                  for name in ("First reader", "Second reader", "Third reader")]
+        with patch("agentcollab.app.INBOX_REQUESTS_PER_AGENT", 2), patch(
+            "agentcollab.app.INBOX_REQUESTS_TOTAL", 3
+        ), patch("agentcollab.rate_limits.time", return_value=121):
+            def read(token):
+                response = self.rpc("tools/call", {"name": "read_inbox", "arguments": {}}, token=token)
+                self.assertEqual(response.status_code, 200, response.text)
+                return response.json()["result"]
+
+            for _ in range(2):
+                self.assertFalse(read(tokens[0]).get("isError"))
+            blocked = read(tokens[0])
+            self.assertTrue(blocked["isError"])
+            self.assertIn("59 seconds", blocked["content"][0]["text"])
+            self.assertFalse(read(tokens[1]).get("isError"))
+            self.assertTrue(read(tokens[2])["isError"])
 
     def test_mcp_isolation_rotation_and_round_trip_across_restart(self):
         local_id = self.store.add_agent(LOCAL_WORKSPACE, "Local preview")
