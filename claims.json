@@ -30,7 +30,7 @@
       "batch": "issue-28-pilot-rate-limits",
       "mode": "manual",
       "branch": "codex/pilot-rate-limits",
-      "pr": null,
+      "pr": 29,
       "expires_at": null
     }
   }
