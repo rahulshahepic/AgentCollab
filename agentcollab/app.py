@@ -240,8 +240,8 @@ def create_app(database: Path, port: int = 8000, *, staging: StagingConfig | Non
         accounts = OwnerAccounts(store, staging.owner_setup_code, staging.owner_setup_expires)
     oauth = StagingOAuth(store, f"{staging.origin}/mcp") if staging else None
     events = (
-        InboxEvents(store, oauth, staging.event_hosts, staging.event_key, discovery_only=staging.event_discovery_only)
-        if staging and (staging.event_hosts or staging.event_discovery_only) else None
+        InboxEvents(store, oauth, staging.event_key, discovery_only=staging.event_discovery_only)
+        if staging and (staging.event_key or staging.event_discovery_only) else None
     )
     server = create_mcp(store, port, staging, oauth, events)
     mcp_app = server.streamable_http_app()

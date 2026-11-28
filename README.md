@@ -88,11 +88,12 @@ callback before they can connect through OAuth.
 
 ### ChatGPT Work and dot inbox notifications
 
-On staging, configure `AGENTCOLLAB_EVENT_CALLBACK_HOSTS` with the confirmed,
-exact ChatGPT webhook hostnames and `AGENTCOLLAB_EVENT_ENCRYPTION_KEY` with a
-stable Fernet key stored in Railway secrets. Keeping the host list empty
-disables the event endpoint and delivery worker. Replacing the encryption key
-requires resubscribing existing clients.
+The ChatGPT provider accepts event callbacks only on
+`connectors.api.openai.com`. On staging, configure
+`AGENTCOLLAB_EVENT_ENCRYPTION_KEY` with a stable Fernet key stored in Railway
+secrets. With no key and discovery mode off, the event endpoint and delivery
+worker are disabled. Replacing the encryption key requires existing clients
+to subscribe again.
 
 Connect the staging plugin using ChatGPT OAuth. In a Work chat or dot, ask it
 to subscribe to `inbox.message_received` and fetch each event's `message_id`
@@ -112,10 +113,9 @@ time, and error category under **Failed push deliveries** on the Agents page.
 Retry requeues the same event ID. The log excludes message bodies and callback
 credentials.
 
-For callback discovery, set `AGENTCOLLAB_EVENT_DISCOVERY_ONLY=1` on staging
-with the callback host allowlist unset. Refresh the ChatGPT plugin and attempt
-a subscription. It returns a callback discovery error by design. Railway logs
+For callback discovery, set `AGENTCOLLAB_EVENT_DISCOVERY_ONLY=1` on staging.
+Refresh the ChatGPT plugin and attempt a subscription. It returns a callback discovery error by design. Railway logs
 the callback hostname alone. The server makes no outbound request, creates no
 subscription, and starts no delivery worker. Verify the hostname belongs to
-ChatGPT before adding it to the allowlist. Remove discovery mode when enabling
+ChatGPT before changing the provider rule. Remove discovery mode when enabling
 delivery with a stable encryption key.
